@@ -74,27 +74,11 @@ mod sealed {
     impl SealedInstance for wgpu::Instance {}
 }
 
-pub(crate) async fn request_powerful_adapter<'a>(
+pub(crate) fn request_powerful_adapter<'a>(
     instance: &wgpu::Instance,
     backends: wgpu::Backends,
     query: AdapterQuery<'a>,
 ) -> Option<wgpu::Adapter> {
-    // Check if query can be satisfied with inbuilt wgpu search provided
-    if let AdapterQuery {
-        compatible_surface,
-        physical_blacklist: &[],
-        force_fallback_adapter,
-    } = query
-    {
-        return instance
-            .request_adapter(&RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                force_fallback_adapter,
-                compatible_surface,
-            })
-            .await;
-    }
-
     let all: Vec<wgpu::Adapter> = instance
         .enumerate_adapters(backends)
         .filter(|adapter: &wgpu::Adapter| {

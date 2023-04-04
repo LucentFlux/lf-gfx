@@ -7,6 +7,13 @@ edition = "2021"
 
 [dependencies]
 wgpu = { version = "0.15" }
+wgpu-async = { path = "../wgpu-async" }
+wgpu-lazybuffers = { path = "../wgpu-lazybuffers" }
+winit = { version = "0.27", features = ["serde"] }
 async-trait = "0.1"
 bytemuck = "1.12"
 bytemuck_derive = "1.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+bitflags = "2.0"
+tokio = { version = "1.0", features = ["rt"] }
