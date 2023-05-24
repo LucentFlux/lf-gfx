@@ -1,10 +1,8 @@
-use wgpu::RequestAdapterOptions;
-
 #[non_exhaustive]
 pub struct AdapterQuery<'a> {
     pub compatible_surface: Option<&'a wgpu::Surface>,
     pub physical_blacklist: &'a [&'a wgpu::Adapter],
-    pub force_fallback_adapter: bool,
+    pub force_adapter_type: Option<wgpu::DeviceType>,
 }
 
 impl<'a> Default for AdapterQuery<'a> {
@@ -12,13 +10,19 @@ impl<'a> Default for AdapterQuery<'a> {
         Self {
             compatible_surface: None,
             physical_blacklist: &[],
-            force_fallback_adapter: false,
+            force_adapter_type: None,
         }
     }
 }
 
 impl<'a> AdapterQuery<'a> {
     pub fn is_adapter_allowed(&self, adapter: &wgpu::Adapter) -> bool {
+        if let Some(forced_type) = self.force_adapter_type {
+            if forced_type != adapter.get_info().device_type {
+                return false;
+            }
+        }
+
         if let Some(surface) = self.compatible_surface {
             if !adapter.is_surface_supported(surface) {
                 return false;

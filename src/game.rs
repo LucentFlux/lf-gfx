@@ -108,7 +108,7 @@ impl<T: Game + 'static> GameState<T> {
                 crate::AdapterQuery {
                     compatible_surface: Some(&surface),
                     physical_blacklist: &[],
-                    force_fallback_adapter: false,
+                    force_adapter_type: None,
                 },
             )
             .unwrap();
@@ -144,7 +144,7 @@ impl<T: Game + 'static> GameState<T> {
             .formats
             .iter()
             .copied()
-            .filter(|f| f.describe().srgb)
+            .filter(|f| f.is_srgb())
             .next()
             .unwrap_or(surface_caps.formats[0]);
         let config = wgpu::SurfaceConfiguration {

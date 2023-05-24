@@ -6,7 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-wgpu = { version = "0.15" }
+wgpu = { version = "0.16" }
 wgpu-async = { path = "../wgpu-async" }
 wgpu-lazybuffers = { path = "../wgpu-lazybuffers" }
 winit = { version = "0.27", features = ["serde"] }
