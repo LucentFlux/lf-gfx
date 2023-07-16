@@ -2,11 +2,7 @@
 pub(crate) mod input;
 pub(crate) mod window_size;
 
-use std::cmp::{max, min};
-
 use async_trait::async_trait;
-use wgpu_async::{wrap_to_async, AsyncDevice, AsyncQueue, OutOfMemoryError};
-use wgpu_lazybuffers::{BufferRingConfig, MemorySystem};
 use winit::{
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoop, EventLoopWindowTarget},
@@ -17,22 +13,17 @@ use crate::{InstanceExt, LimitsExt};
 
 use self::input::InputMap;
 
-const TRANSFER_BUFFER_TARGET_SIZE: u64 = 16 * 4096;
-const TRANSFER_BUFFER_COUNT: usize = 128;
-
 pub enum GameCommand {
     Exit,
 }
 
 pub struct GameInitData<'a> {
-    command_sender: tokio::sync::mpsc::UnboundedSender<GameCommand>,
-    surface: &'a wgpu::Surface,
-    queue: &'a AsyncQueue,
-    limits: &'a wgpu::Limits,
-    config: &'a wgpu::SurfaceConfiguration,
-    size: winit::dpi::PhysicalSize<u32>,
-    window: &'a Window,
-    memory_system: &'a MemorySystem,
+    pub command_sender: tokio::sync::mpsc::UnboundedSender<GameCommand>,
+    pub surface: &'a wgpu::Surface,
+    pub limits: &'a wgpu::Limits,
+    pub config: &'a wgpu::SurfaceConfiguration,
+    pub size: winit::dpi::PhysicalSize<u32>,
+    pub window: &'a Window,
 }
 
 /// All of the callbacks required to implement a game. This API is built on top of a message passing
@@ -47,17 +38,17 @@ pub trait Game: Sized {
     }
     fn default_inputs() -> InputMap<Self::InputType>;
 
-    async fn init(data: GameInitData<'_>) -> Result<Self, OutOfMemoryError>;
+    async fn init(data: GameInitData<'_>) -> Self;
 
     fn window_resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>);
 
     fn handle_input(&mut self, input: &Self::InputType, activation: input::InputActivation);
 
     /// Requests that the next frame is drawn into the view, pretty please :)
-    fn render_to(&mut self, view: wgpu::TextureView) -> Option<wgpu_async::WgpuFuture<()>>;
+    fn render_to(&mut self, view: wgpu::TextureView);
 
     /// Invoked when the window is told to close (i.e. x pressed, sigint, etc.) but not when
-    /// a synthetic exit is triggered by returning `GameCommand::Exit` in `preframe_checkin`
+    /// a synthetic exit is triggered by enqueuing `GameCommand::Exit`.
     fn user_exit_requested(&mut self) {}
 
     /// Invoked right at the end of the program life, after the final frame is rendered.
@@ -68,13 +59,12 @@ pub trait Game: Sized {
 /// implementation
 pub(crate) struct GameState<T: Game> {
     surface: wgpu::Surface,
-    device: AsyncDevice,
-    queue: AsyncQueue,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
     limits: wgpu::Limits,
     config: wgpu::SurfaceConfiguration,
     size: winit::dpi::PhysicalSize<u32>,
     window: Window,
-    memory_system: MemorySystem,
     current_modifiers: input::ModifiersState,
     exit_requested: bool,
     game: T,
@@ -118,10 +108,8 @@ impl<T: Game + 'static> GameState<T> {
         } else {
             adapter.limits()
         };
-        let mut target_limits = T::target_limits();
-        target_limits.max_buffer_size =
-            max(target_limits.max_buffer_size, TRANSFER_BUFFER_TARGET_SIZE);
 
+        let target_limits = T::target_limits();
         let limits = available_limits.intersection(&target_limits);
 
         let (device, queue) = adapter
@@ -158,31 +146,17 @@ impl<T: Game + 'static> GameState<T> {
         };
         surface.configure(&device, &config);
 
-        let (device, queue) = wrap_to_async(device, queue);
-
-        let memory_system = MemorySystem::new_async(
-            &device,
-            BufferRingConfig {
-                chunk_size: min(TRANSFER_BUFFER_TARGET_SIZE, limits.max_buffer_size) as usize,
-                total_transfer_buffers: TRANSFER_BUFFER_COUNT,
-            },
-        )
-        .await
-        .expect("Not enough vram for data transfer buffers");
-
         let (command_sender, command_receiver) = tokio::sync::mpsc::unbounded_channel();
 
         let init_data = GameInitData {
             command_sender,
             surface: &surface,
-            queue: &queue,
             limits: &limits,
             config: &config,
             size,
             window: &window,
-            memory_system: &memory_system,
         };
-        let game = T::init(init_data).await.expect("Not enough vram for game");
+        let game = T::init(init_data).await;
 
         let input_map = T::default_inputs();
 
@@ -196,7 +170,6 @@ impl<T: Game + 'static> GameState<T> {
             limits,
             config,
             size,
-            memory_system,
             game,
             command_receiver,
             input_map,
@@ -210,8 +183,6 @@ impl<T: Game + 'static> GameState<T> {
         // Taken out on `Event::LoopDestroyed`
         let mut state: Option<Self> = None;
 
-        let rt = tokio::runtime::Runtime::new().unwrap();
-
         event_loop.run(move |event, window_target, control_flow| {
             if event == Event::LoopDestroyed {
                 state.take().expect("loop is destroyed once").finished();
@@ -219,7 +190,7 @@ impl<T: Game + 'static> GameState<T> {
             }
             // Resume always emmitted to begin with
             if state.is_none() && event == Event::Resumed {
-                state = Some(rt.block_on(Self::new(window_target)));
+                state = Some(pollster::block_on(Self::new(window_target)));
             }
 
             let state = state
