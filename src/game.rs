@@ -112,10 +112,25 @@ impl<T: Game + 'static> GameState<T> {
         let target_limits = T::target_limits();
         let limits = available_limits.intersection(&target_limits);
 
+        let mut features = wgpu::Features::empty();
+        // Assume integrated and virtual GPUs, and CPUs, are UMA
+        if adapter
+            .features()
+            .contains(wgpu::Features::MAPPABLE_PRIMARY_BUFFERS)
+            && matches!(
+                adapter.get_info().device_type,
+                wgpu::DeviceType::IntegratedGpu
+                    | wgpu::DeviceType::Cpu
+                    | wgpu::DeviceType::VirtualGpu
+            )
+        {
+            features |= wgpu::Features::MAPPABLE_PRIMARY_BUFFERS;
+        }
+
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
-                    features: wgpu::Features::empty(),
+                    features,
                     limits: limits.clone(),
                     label: None,
                 },
