@@ -227,7 +227,7 @@ impl<T: Game + 'static> GameState<T> {
                         state.set_current_input_modifiers(modifiers)
                     }
                     WindowEvent::KeyboardInput {
-                        device_id,
+                        device_id: _device_id,
                         input,
                         is_synthetic,
                     } if !*is_synthetic => {
