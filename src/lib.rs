@@ -41,7 +41,7 @@ mod sealed {
     impl<T: crate::Game> SealedGame for T {}
 }
 
-pub trait DeviceExt: sealed::SealedDevice {
+pub trait LfDeviceExt: sealed::SealedDevice {
     fn create_fragment_only_render_bundle_encoder(
         &self,
         desc: &FragmentOnlyRenderBundleEncoderDescriptor,
@@ -53,7 +53,7 @@ pub trait DeviceExt: sealed::SealedDevice {
     ) -> FragmentOnlyRenderPipeline;
 }
 
-impl DeviceExt for wgpu::Device {
+impl LfDeviceExt for wgpu::Device {
     fn create_fragment_only_render_bundle_encoder(
         &self,
         desc: &FragmentOnlyRenderBundleEncoderDescriptor,
@@ -69,14 +69,14 @@ impl DeviceExt for wgpu::Device {
     }
 }
 
-pub trait CommandEncoderExt: sealed::SealedCommandEncoder {
+pub trait LfCommandEncoderExt: sealed::SealedCommandEncoder {
     fn begin_fragment_only_render_pass<'pass>(
         &'pass mut self,
         desc: &FragmentOnlyRenderPassDescriptor<'pass, '_>,
     ) -> FragmentOnlyRenderPass<'pass>;
 }
 
-impl CommandEncoderExt for wgpu::CommandEncoder {
+impl LfCommandEncoderExt for wgpu::CommandEncoder {
     fn begin_fragment_only_render_pass<'pass>(
         &'pass mut self,
         desc: &FragmentOnlyRenderPassDescriptor<'pass, '_>,
@@ -85,8 +85,7 @@ impl CommandEncoderExt for wgpu::CommandEncoder {
     }
 }
 
-#[async_trait::async_trait]
-pub trait InstanceExt: sealed::SealedInstance {
+pub trait LfInstanceExt: sealed::SealedInstance {
     /// Gets (some notion of) the most powerful adapter available, given the constraints provided.
     fn request_powerful_adapter<'a>(
         &self,
@@ -95,8 +94,7 @@ pub trait InstanceExt: sealed::SealedInstance {
     ) -> Option<wgpu::Adapter>;
 }
 
-#[async_trait::async_trait]
-impl InstanceExt for wgpu::Instance {
+impl LfInstanceExt for wgpu::Instance {
     fn request_powerful_adapter<'a>(
         &self,
         backends: wgpu::Backends,
@@ -106,16 +104,14 @@ impl InstanceExt for wgpu::Instance {
     }
 }
 
-#[async_trait::async_trait]
-pub trait LimitsExt: sealed::SealedLimits {
+pub trait LfLimitsExt: sealed::SealedLimits {
     /// Gets the set of limits supported both by this and the other limits.
     fn intersection<'a>(&self, other: &wgpu::Limits) -> wgpu::Limits;
     /// Gets the set of limits supported by either this ot the other limits.
     fn union<'a>(&self, other: &wgpu::Limits) -> wgpu::Limits;
 }
 
-#[async_trait::async_trait]
-impl LimitsExt for wgpu::Limits {
+impl LfLimitsExt for wgpu::Limits {
     /// Gets the set of limits supported both by this and the other limits.
     fn intersection<'a>(&self, other: &wgpu::Limits) -> wgpu::Limits {
         crate::limits::limits_intersection(self, other)
@@ -126,7 +122,7 @@ impl LimitsExt for wgpu::Limits {
     }
 }
 
-pub trait BufferExt: sealed::SealedBuffer {
+pub trait LfBufferExt: sealed::SealedBuffer {
     /// Blocks and reads the entire buffer, giving the bytes contained. Allocates the temporary staging buffer for
     /// this operation. Panics on error, or if the buffer was not created with `wgpu::BufferUsages::COPY_SRC`.
     ///
@@ -138,7 +134,7 @@ pub trait BufferExt: sealed::SealedBuffer {
     fn debug_read_blocking(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Vec<u8>;
 }
 
-impl BufferExt for wgpu::Buffer {
+impl LfBufferExt for wgpu::Buffer {
     fn debug_read_blocking(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Vec<u8> {
         #[cfg(not(debug_assertions))]
         panic!("debug_read_blocking should never be used in release contexts");
@@ -176,16 +172,18 @@ impl BufferExt for wgpu::Buffer {
     }
 }
 
-#[async_trait::async_trait]
-pub trait GameExt: sealed::SealedGame {
+pub trait LfGameExt: sealed::SealedGame {
+    type InitData;
+
     /// Runs the game.
-    fn run();
+    fn run(init: Self::InitData);
 }
 
-#[async_trait::async_trait]
-impl<T: Game + 'static> GameExt for T {
+impl<T: Game + 'static> LfGameExt for T {
+    type InitData = T::InitData;
+
     /// Runs the game.
-    fn run() {
-        game::GameState::<T>::run();
+    fn run(init: T::InitData) {
+        game::GameState::<T>::run(init);
     }
 }

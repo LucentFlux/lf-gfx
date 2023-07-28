@@ -2,6 +2,8 @@
 pub(crate) mod input;
 pub(crate) mod window_size;
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use winit::{
     event::{Event, WindowEvent},
@@ -9,7 +11,7 @@ use winit::{
     window::{Window, WindowBuilder},
 };
 
-use crate::{InstanceExt, LimitsExt};
+use crate::{LfInstanceExt, LfLimitsExt};
 
 use self::input::InputMap;
 
@@ -17,13 +19,16 @@ pub enum GameCommand {
     Exit,
 }
 
-pub struct GameInitData<'a> {
-    pub command_sender: tokio::sync::mpsc::UnboundedSender<GameCommand>,
+pub struct GameInitData<'a, T> {
+    pub command_sender: flume::Sender<GameCommand>,
     pub surface: &'a wgpu::Surface,
     pub limits: &'a wgpu::Limits,
     pub config: &'a wgpu::SurfaceConfiguration,
     pub size: winit::dpi::PhysicalSize<u32>,
     pub window: &'a Window,
+    pub device: Arc<wgpu::Device>,
+    pub queue: Arc<wgpu::Queue>,
+    pub init: T,
 }
 
 /// All of the callbacks required to implement a game. This API is built on top of a message passing
@@ -31,6 +36,9 @@ pub struct GameInitData<'a> {
 /// different threads.
 #[async_trait]
 pub trait Game: Sized {
+    /// Data processed before the window exists. This should be minimal and kept to `mpsc` message reception from initialiser threads.
+    type InitData;
+
     type InputType;
 
     fn target_limits() -> wgpu::Limits {
@@ -38,7 +46,7 @@ pub trait Game: Sized {
     }
     fn default_inputs() -> InputMap<Self::InputType>;
 
-    async fn init(data: GameInitData<'_>) -> Self;
+    async fn init(data: GameInitData<'_, Self::InitData>) -> Self;
 
     fn window_resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>);
 
@@ -59,8 +67,8 @@ pub trait Game: Sized {
 /// implementation
 pub(crate) struct GameState<T: Game> {
     surface: wgpu::Surface,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
+    device: Arc<wgpu::Device>,
+    queue: Arc<wgpu::Queue>,
     limits: wgpu::Limits,
     config: wgpu::SurfaceConfiguration,
     size: winit::dpi::PhysicalSize<u32>,
@@ -69,12 +77,12 @@ pub(crate) struct GameState<T: Game> {
     exit_requested: bool,
     game: T,
     input_map: input::InputMap<T::InputType>,
-    command_receiver: tokio::sync::mpsc::UnboundedReceiver<GameCommand>,
+    command_receiver: flume::Receiver<GameCommand>,
 }
 
 impl<T: Game + 'static> GameState<T> {
     // Creating some of the wgpu types requires async code
-    async fn new(window_target: &EventLoopWindowTarget<()>) -> Self {
+    async fn new(init: T::InitData, window_target: &EventLoopWindowTarget<()>) -> Self {
         let window = WindowBuilder::new().build(window_target).unwrap();
 
         let size = window.inner_size();
@@ -139,6 +147,8 @@ impl<T: Game + 'static> GameState<T> {
             .await
             .unwrap();
 
+        let (device, queue) = (Arc::new(device), Arc::new(queue));
+
         let surface_caps = surface.get_capabilities(&adapter);
         // Shader code in this tutorial assumes an sRGB surface texture. Using a different
         // one will result all the colors coming out darker. If you want to support non
@@ -161,7 +171,7 @@ impl<T: Game + 'static> GameState<T> {
         };
         surface.configure(&device, &config);
 
-        let (command_sender, command_receiver) = tokio::sync::mpsc::unbounded_channel();
+        let (command_sender, command_receiver) = flume::unbounded();
 
         let init_data = GameInitData {
             command_sender,
@@ -170,6 +180,9 @@ impl<T: Game + 'static> GameState<T> {
             config: &config,
             size,
             window: &window,
+            device: Arc::clone(&device),
+            queue: Arc::clone(&queue),
+            init,
         };
         let game = T::init(init_data).await;
 
@@ -191,26 +204,33 @@ impl<T: Game + 'static> GameState<T> {
         }
     }
 
-    pub(crate) fn run() {
+    pub(crate) fn run(init: T::InitData) {
         let event_loop = EventLoop::new();
 
         // Built on first `Event::Resumed`
         // Taken out on `Event::LoopDestroyed`
         let mut state: Option<Self> = None;
+        let mut init = Some(init);
 
         event_loop.run(move |event, window_target, control_flow| {
             if event == Event::LoopDestroyed {
                 state.take().expect("loop is destroyed once").finished();
                 return;
             }
+
             // Resume always emmitted to begin with
             if state.is_none() && event == Event::Resumed {
-                state = Some(pollster::block_on(Self::new(window_target)));
+                state = Some(pollster::block_on(Self::new(
+                    init.take().expect("should only initialise once"),
+                    window_target,
+                )));
             }
 
-            let state = state
-                .as_mut()
-                .expect("state is built at start and removed on finish");
+            let state = match state.as_mut() {
+                None => return,
+                Some(state) => state,
+            };
+
             match event {
                 Event::WindowEvent {
                     ref event,
