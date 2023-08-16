@@ -2,33 +2,48 @@
 pub(crate) mod input;
 pub(crate) mod window_size;
 
-use std::sync::Arc;
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::prelude::*;
 
 use async_trait::async_trait;
+use thiserror::Error;
 use winit::{
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoop, EventLoopWindowTarget},
     window::{Window, WindowBuilder},
 };
 
-use crate::{LfInstanceExt, LfLimitsExt};
+use crate::LfLimitsExt;
 
 use self::input::InputMap;
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+extern "C" {
+    fn alert(s: &str);
+}
+
+#[derive(Debug, Error)]
+pub enum GameInitialisationFailure {
+    #[error("failed to find an adapter (GPU) that supports the render surface")]
+    AdapterError,
+    #[error("failed to request a device from the adapter chosen: {0}")]
+    DeviceError(wgpu::RequestDeviceError),
+}
 
 pub enum GameCommand {
     Exit,
 }
 
-pub struct GameInitData<'a, T> {
+pub struct GameData {
     pub command_sender: flume::Sender<GameCommand>,
-    pub surface: &'a wgpu::Surface,
-    pub limits: &'a wgpu::Limits,
-    pub config: &'a wgpu::SurfaceConfiguration,
+    pub surface: wgpu::Surface,
+    pub limits: wgpu::Limits,
+    pub config: wgpu::SurfaceConfiguration,
     pub size: winit::dpi::PhysicalSize<u32>,
-    pub window: &'a Window,
-    pub device: Arc<wgpu::Device>,
-    pub queue: Arc<wgpu::Queue>,
-    pub init: T,
+    pub window: Window,
+    pub device: wgpu::Device,
+    pub queue: wgpu::Queue,
 }
 
 /// All of the callbacks required to implement a game. This API is built on top of a message passing
@@ -46,14 +61,25 @@ pub trait Game: Sized {
     }
     fn default_inputs() -> InputMap<Self::InputType>;
 
-    async fn init(data: GameInitData<'_, Self::InitData>) -> Self;
+    async fn init(data: &GameData, init: Self::InitData) -> Self;
+
+    fn on_init_failure(error: GameInitialisationFailure) -> ! {
+        let error = format!("failed to initialise: {}", error);
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            alert(&error);
+        }
+
+        panic!("{}", error);
+    }
 
     fn window_resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>);
 
     fn handle_input(&mut self, input: &Self::InputType, activation: input::InputActivation);
 
     /// Requests that the next frame is drawn into the view, pretty please :)
-    fn render_to(&mut self, view: wgpu::TextureView);
+    fn render_to(&mut self, data: &GameData, view: wgpu::TextureView);
 
     /// Invoked when the window is told to close (i.e. x pressed, sigint, etc.) but not when
     /// a synthetic exit is triggered by enqueuing `GameCommand::Exit`.
@@ -66,13 +92,7 @@ pub trait Game: Sized {
 /// All the data held by a program/game while running. `T` gives the top-level state for the game
 /// implementation
 pub(crate) struct GameState<T: Game> {
-    surface: wgpu::Surface,
-    device: Arc<wgpu::Device>,
-    queue: Arc<wgpu::Queue>,
-    limits: wgpu::Limits,
-    config: wgpu::SurfaceConfiguration,
-    size: winit::dpi::PhysicalSize<u32>,
-    window: Window,
+    data: GameData,
     current_modifiers: input::ModifiersState,
     exit_requested: bool,
     game: T,
@@ -100,16 +120,17 @@ impl<T: Game + 'static> GameState<T> {
         // State owns the window so this should be safe.
         let surface = unsafe { instance.create_surface(&window) }.unwrap();
 
-        let adapter = instance
-            .request_powerful_adapter(
-                wgpu::Backends::all(),
-                crate::AdapterQuery {
-                    compatible_surface: Some(&surface),
-                    physical_blacklist: &[],
-                    force_adapter_type: None,
-                },
-            )
-            .unwrap();
+        let adapter = match instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                force_fallback_adapter: false,
+                compatible_surface: Some(&surface),
+            })
+            .await
+        {
+            Some(adapter) => adapter,
+            None => T::on_init_failure(GameInitialisationFailure::AdapterError),
+        };
 
         let available_limits = if cfg!(target_arch = "wasm32") {
             wgpu::Limits::downlevel_defaults()
@@ -134,25 +155,28 @@ impl<T: Game + 'static> GameState<T> {
         {
             features |= wgpu::Features::MAPPABLE_PRIMARY_BUFFERS;
         }
+        // Things that are always helpful
+        features |= adapter.features().intersection(
+            wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES,
+        );
 
-        let (device, queue) = adapter
+        let (device, queue) = match adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
                     features,
                     limits: limits.clone(),
                     label: None,
                 },
-                None, // Trace path
+                None,
             )
             .await
-            .unwrap();
-
-        let (device, queue) = (Arc::new(device), Arc::new(queue));
+        {
+            Ok(vs) => vs,
+            Err(e) => T::on_init_failure(GameInitialisationFailure::DeviceError(e)),
+        };
 
         let surface_caps = surface.get_capabilities(&adapter);
-        // Shader code in this tutorial assumes an sRGB surface texture. Using a different
-        // one will result all the colors coming out darker. If you want to support non
-        // sRGB surfaces, you'll need to account for that when drawing to the frame.
+
         let surface_format = surface_caps
             .formats
             .iter()
@@ -160,6 +184,7 @@ impl<T: Game + 'static> GameState<T> {
             .filter(|f| f.is_srgb())
             .next()
             .unwrap_or(surface_caps.formats[0]);
+
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,
@@ -173,31 +198,24 @@ impl<T: Game + 'static> GameState<T> {
 
         let (command_sender, command_receiver) = flume::unbounded();
 
-        let init_data = GameInitData {
+        let data = GameData {
             command_sender,
-            surface: &surface,
-            limits: &limits,
-            config: &config,
+            surface,
+            limits,
+            config,
             size,
-            window: &window,
-            device: Arc::clone(&device),
-            queue: Arc::clone(&queue),
-            init,
+            window,
+            device,
+            queue,
         };
-        let game = T::init(init_data).await;
+        let game = T::init(&data, init).await;
 
         let input_map = T::default_inputs();
 
         Self {
+            data,
             exit_requested: false,
             current_modifiers: input::ModifiersState::default(),
-            window,
-            surface,
-            device,
-            queue,
-            limits,
-            config,
-            size,
             game,
             command_receiver,
             input_map,
@@ -231,76 +249,87 @@ impl<T: Game + 'static> GameState<T> {
                 Some(state) => state,
             };
 
-            match event {
-                Event::WindowEvent {
-                    ref event,
-                    window_id,
-                } if window_id == state.window().id() => match event {
-                    WindowEvent::CloseRequested | WindowEvent::Destroyed => state.request_exit(),
-                    WindowEvent::Resized(physical_size) => {
-                        state.resize(*physical_size);
-                    }
-                    WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
-                        state.resize(**new_inner_size);
-                    }
-                    WindowEvent::ModifiersChanged(modifiers) => {
-                        state.set_current_input_modifiers(modifiers)
-                    }
-                    WindowEvent::KeyboardInput {
-                        device_id: _device_id,
-                        input,
-                        is_synthetic,
-                    } if !*is_synthetic => {
-                        if let Some(key) = input.virtual_keycode {
-                            let activation = match input.state {
-                                winit::event::ElementState::Pressed => 1.0,
-                                winit::event::ElementState::Released => 0.0,
-                            };
-                            let activation =
-                                input::InputActivation::try_from(activation).expect("from const");
-                            state.input(input::InputType::KnownKeyboard(key), activation);
-                        } else {
-                            eprintln!("unknown key code, scan code: {:?}", input.scancode)
-                        }
-                    }
-                    _ => {}
-                },
-                Event::RedrawRequested(window_id) if window_id == state.window().id() => {
-                    state.pre_frame_update();
-
-                    // Check everything the game implementation can send 'upstream'
-                    if state.exit_requested {
-                        *control_flow = ControlFlow::Exit;
-                    }
-
-                    match state.render() {
-                        Ok(_) => {}
-                        Err(wgpu::SurfaceError::Lost) => state.resize(state.size),
-                        Err(wgpu::SurfaceError::OutOfMemory) => *control_flow = ControlFlow::Exit,
-                        // All other errors (Outdated, Timeout) should be resolved by the next frame
-                        Err(e) => eprintln!("{:?}", e),
-                    }
-                }
-                Event::MainEventsCleared => {
-                    state.window().request_redraw();
-                }
-                _ => {}
-            }
+            state.process_event(event, window_target, control_flow);
         });
     }
 
-    pub fn window(&self) -> &Window {
-        &self.window
-    }
-}
+    fn process_event(
+        &mut self,
+        event: Event<'_, ()>,
+        _window_target: &EventLoopWindowTarget<()>,
+        control_flow: &mut ControlFlow,
+    ) {
+        match event {
+            Event::WindowEvent {
+                ref event,
+                window_id,
+            } if window_id == self.window().id() => match event {
+                WindowEvent::CloseRequested | WindowEvent::Destroyed => self.request_exit(),
+                WindowEvent::Resized(physical_size) => {
+                    self.resize(*physical_size);
+                }
+                WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
+                    self.resize(**new_inner_size);
+                }
+                WindowEvent::ModifiersChanged(modifiers) => {
+                    self.set_current_input_modifiers(modifiers)
+                }
+                WindowEvent::KeyboardInput {
+                    device_id: _device_id,
+                    input,
+                    is_synthetic,
+                } if !*is_synthetic => {
+                    if let Some(key) = input.virtual_keycode {
+                        let activation = match input.state {
+                            winit::event::ElementState::Pressed => 1.0,
+                            winit::event::ElementState::Released => 0.0,
+                        };
+                        let activation =
+                            input::InputActivation::try_from(activation).expect("from const");
+                        self.input(input::InputType::KnownKeyboard(key), activation);
+                    } else {
+                        eprintln!("unknown key code, scan code: {:?}", input.scancode)
+                    }
+                }
+                _ => {}
+            },
+            Event::RedrawRequested(window_id) if window_id == self.window().id() => {
+                self.data.device.poll(wgpu::MaintainBase::Poll);
 
-impl<T: Game + 'static> GameState<T> {
+                self.pre_frame_update();
+
+                // Check everything the game implementation can send 'upstream'
+                if self.exit_requested {
+                    *control_flow = ControlFlow::Exit;
+                }
+
+                match self.render() {
+                    Ok(_) => {}
+                    Err(wgpu::SurfaceError::Lost) => self.resize(self.data.size),
+                    Err(wgpu::SurfaceError::OutOfMemory) => *control_flow = ControlFlow::Exit,
+                    // All other errors (Outdated, Timeout) should be resolved by the next frame
+                    Err(e) => eprintln!("{:?}", e),
+                }
+            }
+            Event::MainEventsCleared => {
+                self.window().request_redraw();
+            }
+            _ => {}
+        }
+    }
+
+    pub fn window(&self) -> &Window {
+        &self.data.window
+    }
+
     fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
         if new_size.width > 0 && new_size.height > 0 {
-            self.size = new_size;
-            self.config.width = new_size.width;
-            self.config.height = new_size.height;
-            self.surface.configure(&self.device, &self.config);
+            self.data.size = new_size;
+            self.data.config.width = new_size.width;
+            self.data.config.height = new_size.height;
+            self.data
+                .surface
+                .configure(&self.data.device, &self.data.config);
 
             self.game.window_resize(new_size)
         }
@@ -341,12 +370,12 @@ impl<T: Game + 'static> GameState<T> {
     }
 
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
-        let output = self.surface.get_current_texture()?;
+        let output = self.data.surface.get_current_texture()?;
         let view = output
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        self.game.render_to(view);
+        self.game.render_to(&self.data, view);
 
         output.present();
         Ok(())

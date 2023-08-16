@@ -132,7 +132,7 @@ impl<'a> FragmentOnlyRenderBundleEncoder<'a> {
     ) -> Self {
         let encoder = device.create_render_bundle_encoder(&wgpu::RenderBundleEncoderDescriptor {
             label: desc.label.as_deref(),
-            color_formats: desc.color_formats.clone(),
+            color_formats: desc.color_formats,
             depth_stencil: None,
             sample_count: desc.sample_count,
             multiview: desc.multiview,

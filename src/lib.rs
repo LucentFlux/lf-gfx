@@ -1,9 +1,7 @@
-mod adapter_query;
 mod fragment_only;
 mod game;
 mod limits;
 
-pub use adapter_query::AdapterQuery;
 pub use fragment_only::FragmentOnlyRenderBundleEncoder;
 pub use fragment_only::FragmentOnlyRenderBundleEncoderDescriptor;
 pub use fragment_only::FragmentOnlyRenderPass;
@@ -13,7 +11,8 @@ pub use fragment_only::FragmentOnlyRenderPipelineDescriptor;
 pub use game::window_size::WindowSizeDependent;
 pub use game::Game;
 pub use game::GameCommand;
-pub use game::GameInitData;
+pub use game::GameData;
+pub use game::GameInitialisationFailure;
 pub mod input {
     pub use crate::game::input::*;
 }
@@ -35,6 +34,9 @@ mod sealed {
 
     pub trait SealedBuffer {}
     impl SealedBuffer for wgpu::Buffer {}
+
+    pub trait SealedBindGroupLayoutEntry {}
+    impl SealedBindGroupLayoutEntry for wgpu::BindGroupLayoutEntry {}
 
     // We even want to extend our own objects
     pub trait SealedGame {}
@@ -82,25 +84,6 @@ impl LfCommandEncoderExt for wgpu::CommandEncoder {
         desc: &FragmentOnlyRenderPassDescriptor<'pass, '_>,
     ) -> FragmentOnlyRenderPass<'pass> {
         FragmentOnlyRenderPass::new(self, desc)
-    }
-}
-
-pub trait LfInstanceExt: sealed::SealedInstance {
-    /// Gets (some notion of) the most powerful adapter available, given the constraints provided.
-    fn request_powerful_adapter<'a>(
-        &self,
-        backends: wgpu::Backends,
-        query: AdapterQuery<'a>,
-    ) -> Option<wgpu::Adapter>;
-}
-
-impl LfInstanceExt for wgpu::Instance {
-    fn request_powerful_adapter<'a>(
-        &self,
-        backends: wgpu::Backends,
-        query: AdapterQuery<'a>,
-    ) -> Option<wgpu::Adapter> {
-        adapter_query::request_powerful_adapter(self, backends, query)
     }
 }
 
@@ -169,6 +152,40 @@ impl LfBufferExt for wgpu::Buffer {
 
         let slice = staging.slice(..).get_mapped_range();
         slice.to_vec()
+    }
+}
+
+pub trait LfBindGroupLayoutEntryExt: sealed::SealedBindGroupLayoutEntry {
+    // Some common bindings as constructors
+    fn read_only_compute_storage(binding: u32) -> Self;
+    fn mutable_compute_storage(binding: u32) -> Self;
+}
+
+impl LfBindGroupLayoutEntryExt for wgpu::BindGroupLayoutEntry {
+    fn read_only_compute_storage(binding: u32) -> Self {
+        wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        }
+    }
+
+    fn mutable_compute_storage(binding: u32) -> Self {
+        wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: false },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        }
     }
 }
 
