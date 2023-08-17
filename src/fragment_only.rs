@@ -76,7 +76,7 @@ impl FragmentOnlyRenderPipeline {
                 uv: [2.0, -1.0],
             },
             FullscreenVertex {
-                position: [0.0, 2.0, 0.5, 1.0],
+                position: [0.0, 3.0, 0.5, 1.0],
                 uv: [0.0, 2.0],
             },
         ];

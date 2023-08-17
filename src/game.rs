@@ -38,6 +38,7 @@ pub enum GameCommand {
 pub struct GameData {
     pub command_sender: flume::Sender<GameCommand>,
     pub surface: wgpu::Surface,
+    pub surface_format: wgpu::TextureFormat,
     pub limits: wgpu::Limits,
     pub config: wgpu::SurfaceConfiguration,
     pub size: winit::dpi::PhysicalSize<u32>,
@@ -201,6 +202,7 @@ impl<T: Game + 'static> GameState<T> {
         let data = GameData {
             command_sender,
             surface,
+            surface_format,
             limits,
             config,
             size,
