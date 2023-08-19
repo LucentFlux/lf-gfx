@@ -77,7 +77,7 @@ impl FragmentOnlyRenderPipeline {
             },
             FullscreenVertex {
                 position: [0.0, 3.0, 0.5, 1.0],
-                uv: [0.0, 2.0],
+                uv: [0.0, 3.0],
             },
         ];
         let fullscreen_vertices_bytes: &[u8] = bytemuck::cast_slice(&fullscreen_vertices);

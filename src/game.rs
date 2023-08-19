@@ -75,19 +75,27 @@ pub trait Game: Sized {
         panic!("{}", error);
     }
 
-    fn window_resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>);
+    fn window_resize(&mut self, data: &GameData, new_size: winit::dpi::PhysicalSize<u32>);
 
-    fn handle_input(&mut self, input: &Self::InputType, activation: input::InputActivation);
+    fn handle_input(
+        &mut self,
+        data: &GameData,
+        input: &Self::InputType,
+        activation: input::InputActivation,
+    );
 
     /// Requests that the next frame is drawn into the view, pretty please :)
     fn render_to(&mut self, data: &GameData, view: wgpu::TextureView);
 
     /// Invoked when the window is told to close (i.e. x pressed, sigint, etc.) but not when
-    /// a synthetic exit is triggered by enqueuing `GameCommand::Exit`.
-    fn user_exit_requested(&mut self) {}
+    /// a synthetic exit is triggered by enqueuing `GameCommand::Exit`. To actually do something with the
+    /// user's request to quit, this method must enqueue `GameCommand::Exit`
+    fn user_exit_requested(&mut self, data: &GameData) {
+        let _ = data.command_sender.send(GameCommand::Exit);
+    }
 
     /// Invoked right at the end of the program life, after the final frame is rendered.
-    fn finished(self) {}
+    fn finished(self, _: GameData) {}
 }
 
 /// All the data held by a program/game while running. `T` gives the top-level state for the game
@@ -333,7 +341,7 @@ impl<T: Game + 'static> GameState<T> {
                 .surface
                 .configure(&self.data.device, &self.data.config);
 
-            self.game.window_resize(new_size)
+            self.game.window_resize(&self.data, new_size)
         }
     }
 
@@ -353,13 +361,12 @@ impl<T: Game + 'static> GameState<T> {
         };
         let input_value = self.input_map.get(&code);
         if let Some(input_value) = input_value {
-            self.game.handle_input(input_value, activation)
+            self.game.handle_input(&self.data, input_value, activation)
         }
     }
 
     fn request_exit(&mut self) {
-        self.game.user_exit_requested();
-        self.exit_requested = true;
+        self.game.user_exit_requested(&self.data);
     }
 
     fn pre_frame_update(&mut self) {
@@ -384,6 +391,6 @@ impl<T: Game + 'static> GameState<T> {
     }
 
     fn finished(self) {
-        self.game.finished()
+        self.game.finished(self.data)
     }
 }
