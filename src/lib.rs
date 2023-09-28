@@ -73,6 +73,7 @@ pub struct PaddedBufferInitDescriptor<'a> {
     pub usage: wgpu::BufferUsages,
 }
 
+/// Extensions to [`wgpu::Device`].
 pub trait LfDeviceExt: sealed::SealedDevice {
     fn create_buffer_padded(&self, desc: wgpu::BufferDescriptor) -> wgpu::Buffer;
     fn create_buffer_init_padded(&self, desc: PaddedBufferInitDescriptor) -> wgpu::Buffer;
@@ -86,6 +87,14 @@ pub trait LfDeviceExt: sealed::SealedDevice {
         &self,
         desc: &FragmentOnlyRenderPipelineDescriptor,
     ) -> FragmentOnlyRenderPipeline;
+
+    /// Creates a module, either with `create_shader_module` on debug or wasm, or `create_shader_module_unchecked` on release.
+    ///
+    /// Safety requirements carry from `create_shader_module_unchecked`.
+    unsafe fn create_shader_module_unchecked_on_release(
+        &self,
+        desc: wgpu::ShaderModuleDescriptor,
+    ) -> wgpu::ShaderModule;
 }
 
 impl LfDeviceExt for wgpu::Device {
@@ -119,8 +128,23 @@ impl LfDeviceExt for wgpu::Device {
     ) -> FragmentOnlyRenderPipeline {
         FragmentOnlyRenderPipeline::new(self, desc)
     }
+
+    unsafe fn create_shader_module_unchecked_on_release(
+        &self,
+        desc: wgpu::ShaderModuleDescriptor,
+    ) -> wgpu::ShaderModule {
+        #[cfg(any(target_arch = "wasm", debug_assertions))]
+        {
+            self.create_shader_module(desc)
+        }
+        #[cfg(not(any(target_arch = "wasm", debug_assertions)))]
+        {
+            self.create_shader_module_unchecked(desc)
+        }
+    }
 }
 
+/// Extensions to [`wgpu::CommandEncoder`].
 pub trait LfCommandEncoderExt: sealed::SealedCommandEncoder {
     fn begin_fragment_only_render_pass<'pass>(
         &'pass mut self,
@@ -137,6 +161,7 @@ impl LfCommandEncoderExt for wgpu::CommandEncoder {
     }
 }
 
+/// Extensions to [`wgpu::Limits`].
 pub trait LfLimitsExt: sealed::SealedLimits {
     /// Gets the set of limits supported both by this and the other limits.
     fn intersection<'a>(&self, other: &wgpu::Limits) -> wgpu::Limits;
@@ -155,6 +180,7 @@ impl LfLimitsExt for wgpu::Limits {
     }
 }
 
+/// Extensions to [`wgpu::Queue`].
 pub trait LfQueueExt: sealed::SealedQueue {
     /// Writes the given data to the given buffer using [`wgpu::Queue::write_buffer`],
     /// but pads the data to the nearest multiple of the alignment required for buffer writing.
@@ -189,23 +215,17 @@ impl LfQueueExt for wgpu::Queue {
     }
 }
 
+/// Extensions to [`wgpu::Buffer`].
 pub trait LfBufferExt: sealed::SealedBuffer {
     /// Blocks and reads the entire buffer, giving the bytes contained. Allocates the temporary staging buffer for
     /// this operation. Panics on error, or if the buffer was not created with `wgpu::BufferUsages::COPY_SRC`.
     ///
     /// Just use `wgpu::Queue::write_buffer` if you want to write.
-    ///
-    /// # Panics
-    ///
-    /// Panics if this is a release build, since this method should only be used while debugging.
     fn debug_read_blocking(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Vec<u8>;
 }
 
 impl LfBufferExt for wgpu::Buffer {
     fn debug_read_blocking(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Vec<u8> {
-        #[cfg(not(debug_assertions))]
-        panic!("debug_read_blocking should never be used in release contexts");
-
         assert!(self.usage().contains(wgpu::BufferUsages::COPY_SRC));
 
         let staging = device.create_buffer(&wgpu::BufferDescriptor {
@@ -239,6 +259,7 @@ impl LfBufferExt for wgpu::Buffer {
     }
 }
 
+/// Extensions to [`wgpu::BindGroupLayoutEntry`].
 pub trait LfBindGroupLayoutEntryExt: sealed::SealedBindGroupLayoutEntry {
     // Some common bindings as constructors
     fn read_only_compute_storage(binding: u32) -> Self;
@@ -273,6 +294,7 @@ impl LfBindGroupLayoutEntryExt for wgpu::BindGroupLayoutEntry {
     }
 }
 
+/// Extensions to an implemented game object.
 pub trait LfGameExt: sealed::SealedGame {
     type InitData;
 
