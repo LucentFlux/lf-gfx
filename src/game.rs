@@ -10,6 +10,7 @@ use wasm_bindgen::prelude::*;
 use async_trait::async_trait;
 use thiserror::Error;
 use winit::{
+    dpi::PhysicalPosition,
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoop, EventLoopWindowTarget},
     window::{Window, WindowBuilder},
@@ -17,7 +18,7 @@ use winit::{
 
 use crate::LfLimitsExt;
 
-use self::input::InputMap;
+use self::input::{InputMap, MouseInputType, VectorInputActivation, VectorInputType};
 
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
@@ -59,6 +60,8 @@ impl ExitFlag {
 
 pub enum GameCommand {
     Exit,
+    GrabCursor(bool),
+    SetMouseSensitivity(f32),
 }
 
 pub struct GameData {
@@ -82,12 +85,13 @@ pub trait Game: Sized {
     /// Data processed before the window exists. This should be minimal and kept to `mpsc` message reception from initialiser threads.
     type InitData;
 
-    type InputType;
+    type LinearInputType;
+    type VectorInputType;
 
     fn target_limits() -> wgpu::Limits {
         wgpu::Limits::downlevel_webgl2_defaults()
     }
-    fn default_inputs() -> InputMap<Self::InputType>;
+    fn default_inputs() -> InputMap<Self::LinearInputType, Self::VectorInputType>;
 
     async fn init(data: &GameData, init: Self::InitData) -> Self;
 
@@ -104,11 +108,18 @@ pub trait Game: Sized {
 
     fn window_resize(&mut self, data: &GameData, new_size: winit::dpi::PhysicalSize<u32>);
 
-    fn handle_input(
+    fn handle_linear_input(
         &mut self,
         data: &GameData,
-        input: &Self::InputType,
-        activation: input::InputActivation,
+        input: &Self::LinearInputType,
+        activation: input::LinearInputActivation,
+    );
+
+    fn handle_vector_input(
+        &mut self,
+        data: &GameData,
+        input: &Self::VectorInputType,
+        activation: input::VectorInputActivation,
     );
 
     /// Requests that the next frame is drawn into the view, pretty please :)
@@ -131,8 +142,15 @@ pub(crate) struct GameState<T: Game> {
     data: GameData,
     current_modifiers: input::ModifiersState,
     game: T,
-    input_map: input::InputMap<T::InputType>,
+    input_map: input::InputMap<T::LinearInputType, T::VectorInputType>,
     command_receiver: flume::Receiver<GameCommand>,
+
+    // While true, disallows cursor movement
+    grab_cursor: bool,
+    // The last position we saw the cursor at
+    last_cursor_position: PhysicalPosition<f64>,
+    // A multiplier, from pixels moved to intensity, clamped at 1.0
+    mouse_sensitivity: f32,
 }
 
 impl<T: Game + 'static> GameState<T> {
@@ -255,6 +273,9 @@ impl<T: Game + 'static> GameState<T> {
             game,
             command_receiver,
             input_map,
+            grab_cursor: false,
+            last_cursor_position: PhysicalPosition { x: 0.0, y: 0.0 },
+            mouse_sensitivity: 0.01,
         }
     }
 
@@ -308,7 +329,11 @@ impl<T: Game + 'static> GameState<T> {
                     self.resize(**new_inner_size);
                 }
                 WindowEvent::ModifiersChanged(modifiers) => {
-                    self.set_current_input_modifiers(modifiers)
+                    let changed = self.set_current_input_modifiers(modifiers);
+
+                    for (key, activation) in changed {
+                        self.linear_input(input::LinearInputType::KnownKeyboard(key), activation);
+                    }
                 }
                 WindowEvent::KeyboardInput {
                     device_id: _device_id,
@@ -321,10 +346,54 @@ impl<T: Game + 'static> GameState<T> {
                             winit::event::ElementState::Released => 0.0,
                         };
                         let activation =
-                            input::InputActivation::try_from(activation).expect("from const");
-                        self.input(input::InputType::KnownKeyboard(key), activation);
+                            input::LinearInputActivation::try_from(activation).expect("from const");
+                        self.linear_input(
+                            input::LinearInputType::KnownKeyboard(key.into()),
+                            activation,
+                        );
                     } else {
                         eprintln!("unknown key code, scan code: {:?}", input.scancode)
+                    }
+                }
+                WindowEvent::CursorMoved {
+                    device_id: _device_id,
+                    position,
+                    ..
+                } => {
+                    let delta_x = position.x - self.last_cursor_position.x;
+                    let delta_y = position.y - self.last_cursor_position.y;
+
+                    // Only trigger a single linear event, depending on the largest movement
+                    if delta_x.abs() > 2.0 || delta_y.abs() > 2.0 {
+                        self.process_linear_mouse_movement(delta_x, delta_y);
+                    }
+
+                    // Also trigger a vector input
+                    self.vector_input(
+                        VectorInputType::MouseMove,
+                        VectorInputActivation::clamp(
+                            delta_x as f32 * self.mouse_sensitivity,
+                            delta_y as f32 * self.mouse_sensitivity,
+                        ),
+                    );
+
+                    self.last_cursor_position = position.cast();
+
+                    // Winit doesn't support cursor locking on a lot of platforms, so do it manually.
+                    if self.grab_cursor {
+                        let mut center = self.data.window.inner_size();
+                        center.width /= 2;
+                        center.height /= 2;
+
+                        let old_pos = position.cast::<u32>();
+                        let new_pos = PhysicalPosition::new(center.width, center.height);
+
+                        if old_pos != new_pos {
+                            // Ignore result - if it doesn't work then there's not much we can do.
+                            let _ = self.data.window.set_cursor_position(new_pos);
+                        }
+
+                        self.last_cursor_position = new_pos.cast();
                     }
                 }
                 _ => {}
@@ -371,23 +440,102 @@ impl<T: Game + 'static> GameState<T> {
         }
     }
 
-    fn set_current_input_modifiers(&mut self, modifiers: &winit::event::ModifiersState) {
+    fn set_current_input_modifiers(
+        &mut self,
+        modifiers: &winit::event::ModifiersState,
+    ) -> Vec<(input::KeyCode, input::LinearInputActivation)> {
+        let mut changed = Vec::new();
+        let mut check = |old, new, key| {
+            if old != new {
+                let activation = if old {
+                    input::LinearInputActivation::try_from(0.0).unwrap()
+                } else {
+                    input::LinearInputActivation::try_from(1.0).unwrap()
+                };
+                changed.push((key, activation))
+            }
+        };
+
+        check(
+            self.current_modifiers.shift,
+            modifiers.shift(),
+            input::KeyCode::Shift,
+        );
+        check(
+            self.current_modifiers.ctrl,
+            modifiers.ctrl(),
+            input::KeyCode::Ctrl,
+        );
+        check(
+            self.current_modifiers.alt,
+            modifiers.alt(),
+            input::KeyCode::Alt,
+        );
+        check(
+            self.current_modifiers.logo,
+            modifiers.logo(),
+            input::KeyCode::Logo,
+        );
+
         self.current_modifiers = input::ModifiersState {
             shift: modifiers.shift(),
             ctrl: modifiers.ctrl(),
             alt: modifiers.alt(),
             logo: modifiers.logo(),
+        };
+
+        return changed;
+    }
+
+    fn process_linear_mouse_movement(&mut self, delta_x: f64, delta_y: f64) {
+        if delta_x.abs() > delta_y.abs() {
+            if delta_x > 0.0 {
+                self.linear_input(
+                    input::LinearInputType::Mouse(MouseInputType::MoveRight),
+                    input::LinearInputActivation::clamp(delta_x as f32 * self.mouse_sensitivity),
+                );
+            } else {
+                self.linear_input(
+                    input::LinearInputType::Mouse(MouseInputType::MoveLeft),
+                    input::LinearInputActivation::clamp(-delta_x as f32 * self.mouse_sensitivity),
+                );
+            }
+        } else {
+            if delta_y > 0.0 {
+                self.linear_input(
+                    input::LinearInputType::Mouse(MouseInputType::MoveUp),
+                    input::LinearInputActivation::clamp(delta_y as f32 * self.mouse_sensitivity),
+                );
+            } else {
+                self.linear_input(
+                    input::LinearInputType::Mouse(MouseInputType::MoveDown),
+                    input::LinearInputActivation::clamp(-delta_y as f32 * self.mouse_sensitivity),
+                );
+            }
         }
     }
 
-    fn input(&mut self, inputted: input::InputType, activation: input::InputActivation) {
-        let code = input::InputCode {
-            modifiers: self.current_modifiers,
-            inputted,
-        };
-        let input_value = self.input_map.get(&code);
+    fn linear_input(
+        &mut self,
+        inputted: input::LinearInputType,
+        activation: input::LinearInputActivation,
+    ) {
+        let input_value = self.input_map.get_linear(&inputted);
         if let Some(input_value) = input_value {
-            self.game.handle_input(&self.data, input_value, activation)
+            self.game
+                .handle_linear_input(&self.data, input_value, activation)
+        }
+    }
+
+    fn vector_input(
+        &mut self,
+        inputted: input::VectorInputType,
+        activation: input::VectorInputActivation,
+    ) {
+        let input_value = self.input_map.get_vector(&inputted);
+        if let Some(input_value) = input_value {
+            self.game
+                .handle_vector_input(&self.data, input_value, activation)
         }
     }
 
@@ -401,6 +549,13 @@ impl<T: Game + 'static> GameState<T> {
         while let Ok(cmd) = self.command_receiver.try_recv() {
             match cmd {
                 GameCommand::Exit => self.data.exit_flag.set(),
+                GameCommand::GrabCursor(should_grab) => {
+                    self.grab_cursor = should_grab;
+                    self.data.window.set_cursor_visible(!should_grab);
+                }
+                GameCommand::SetMouseSensitivity(new_sensitivity) => {
+                    self.mouse_sensitivity = new_sensitivity;
+                }
             }
         }
     }
