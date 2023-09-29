@@ -9,6 +9,7 @@ pub use fragment_only::FragmentOnlyRenderPassDescriptor;
 pub use fragment_only::FragmentOnlyRenderPipeline;
 pub use fragment_only::FragmentOnlyRenderPipelineDescriptor;
 pub use game::window_size::WindowSizeDependent;
+pub use game::ExitFlag;
 pub use game::Game;
 pub use game::GameCommand;
 pub use game::GameData;

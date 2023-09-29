@@ -2,6 +2,8 @@
 pub(crate) mod input;
 pub(crate) mod window_size;
 
+use std::sync::{atomic::AtomicBool, Arc};
+
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
@@ -31,6 +33,30 @@ pub enum GameInitialisationFailure {
     DeviceError(wgpu::RequestDeviceError),
 }
 
+/// A cloneable and distributable flag that can be cheaply queried to see if the game has exited.
+///
+/// The idea is to clone this into in every thread you spawn so that they can gracefully exit when the game does.
+#[derive(Clone)]
+pub struct ExitFlag {
+    inner: Arc<AtomicBool>,
+}
+
+impl ExitFlag {
+    fn new() -> Self {
+        Self {
+            inner: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    pub fn get(&self) -> bool {
+        self.inner.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    fn set(&self) {
+        self.inner.store(true, std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
 pub enum GameCommand {
     Exit,
 }
@@ -45,6 +71,7 @@ pub struct GameData {
     pub window: Window,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
+    pub exit_flag: ExitFlag,
 }
 
 /// All of the callbacks required to implement a game. This API is built on top of a message passing
@@ -103,7 +130,6 @@ pub trait Game: Sized {
 pub(crate) struct GameState<T: Game> {
     data: GameData,
     current_modifiers: input::ModifiersState,
-    exit_requested: bool,
     game: T,
     input_map: input::InputMap<T::InputType>,
     command_receiver: flume::Receiver<GameCommand>,
@@ -217,6 +243,7 @@ impl<T: Game + 'static> GameState<T> {
             window,
             device,
             queue,
+            exit_flag: ExitFlag::new(),
         };
         let game = T::init(&data, init).await;
 
@@ -224,7 +251,6 @@ impl<T: Game + 'static> GameState<T> {
 
         Self {
             data,
-            exit_requested: false,
             current_modifiers: input::ModifiersState::default(),
             game,
             command_receiver,
@@ -309,7 +335,7 @@ impl<T: Game + 'static> GameState<T> {
                 self.pre_frame_update();
 
                 // Check everything the game implementation can send 'upstream'
-                if self.exit_requested {
+                if self.data.exit_flag.get() {
                     *control_flow = ControlFlow::Exit;
                 }
 
@@ -366,6 +392,7 @@ impl<T: Game + 'static> GameState<T> {
     }
 
     fn request_exit(&mut self) {
+        self.data.exit_flag.set();
         self.game.user_exit_requested(&self.data);
     }
 
@@ -373,7 +400,7 @@ impl<T: Game + 'static> GameState<T> {
         // Get all the things the game wants to do before the next frame
         while let Ok(cmd) = self.command_receiver.try_recv() {
             match cmd {
-                GameCommand::Exit => self.exit_requested = true,
+                GameCommand::Exit => self.data.exit_flag.set(),
             }
         }
     }
