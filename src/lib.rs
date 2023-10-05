@@ -14,6 +14,7 @@ pub use game::Game;
 pub use game::GameCommand;
 pub use game::GameData;
 pub use game::GameInitialisationFailure;
+pub use game::InputMode;
 use wgpu::util::DeviceExt;
 pub mod input {
     pub use crate::game::input::*;

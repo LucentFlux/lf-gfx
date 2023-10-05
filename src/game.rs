@@ -58,9 +58,53 @@ impl ExitFlag {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum InputMode {
+    /// Indicates that any keyboard, mouse or gamepad input should be captured by the input management system,
+    /// no raw input events should be passed to the game implementation, and the cursor should be hidden.
+    Exclusive,
+    /// Indicates that any keyboard, mouse or gamepad input should not be captured by the input management system,
+    /// all raw input events should be passed to the game implementation, and the cursor should be shown.
+    UI,
+    /// Indicates that keyboard, mouse or gamepad input should be captured both by the input management system,
+    /// and raw input events should be passed to the game implementation, and the cursor should be shown.
+    Unified,
+}
+impl InputMode {
+    fn should_hide_cursor(self) -> bool {
+        match self {
+            InputMode::Exclusive => true,
+            InputMode::UI => false,
+            InputMode::Unified => false,
+        }
+    }
+    fn should_handle_input(self) -> bool {
+        match self {
+            InputMode::Exclusive => true,
+            InputMode::UI => false,
+            InputMode::Unified => true,
+        }
+    }
+    fn should_propogate_raw_input(self) -> bool {
+        match self {
+            InputMode::Exclusive => false,
+            InputMode::UI => true,
+            InputMode::Unified => true,
+        }
+    }
+    fn should_lock_cursor(self) -> bool {
+        match self {
+            InputMode::Exclusive => true,
+            InputMode::UI => false,
+            InputMode::Unified => false,
+        }
+    }
+}
+
+/// A command sent to the game to change the game state
 pub enum GameCommand {
     Exit,
-    GrabCursor(bool),
+    SetInputMode(InputMode),
     SetMouseSensitivity(f32),
 }
 
@@ -106,6 +150,14 @@ pub trait Game: Sized {
         panic!("{}", error);
     }
 
+    /// Allows you to intercept and cancel events, before passing them off to the standard event handler,
+    /// to allow for egui integration, among others.
+    ///
+    /// This method only receives input events if the cursor is not captured, to avoid UI glitches.
+    fn process_raw_event<'a, T>(&mut self, event: Event<'a, T>) -> Option<Event<'a, T>> {
+        Some(event)
+    }
+
     fn window_resize(&mut self, data: &GameData, new_size: winit::dpi::PhysicalSize<u32>);
 
     fn handle_linear_input(
@@ -146,7 +198,7 @@ pub(crate) struct GameState<T: Game> {
     command_receiver: flume::Receiver<GameCommand>,
 
     // While true, disallows cursor movement
-    grab_cursor: bool,
+    input_mode: InputMode,
     // The last position we saw the cursor at
     last_cursor_position: PhysicalPosition<f64>,
     // A multiplier, from pixels moved to intensity, clamped at 1.0
@@ -228,6 +280,13 @@ impl<T: Game + 'static> GameState<T> {
             Err(e) => T::on_init_failure(GameInitialisationFailure::DeviceError(e)),
         };
 
+        // Configure surface
+        let mut surface_config = surface
+            .get_default_config(&adapter, size.width, size.height)
+            .expect("got an adapter based on the surface");
+        surface_config.present_mode = wgpu::PresentMode::AutoVsync;
+        surface.configure(&device, &surface_config);
+
         let surface_caps = surface.get_capabilities(&adapter);
 
         let surface_format = surface_caps
@@ -251,6 +310,11 @@ impl<T: Game + 'static> GameState<T> {
 
         let (command_sender, command_receiver) = flume::unbounded();
 
+        // Some state can be set by commands to ensure valid initial state.
+        command_sender
+            .try_send(GameCommand::SetInputMode(InputMode::Unified))
+            .expect("unbounded queue helf by this thread should send immediately");
+
         let data = GameData {
             command_sender,
             surface,
@@ -273,7 +337,7 @@ impl<T: Game + 'static> GameState<T> {
             game,
             command_receiver,
             input_map,
-            grab_cursor: false,
+            input_mode: InputMode::Unified,
             last_cursor_position: PhysicalPosition { x: 0.0, y: 0.0 },
             mouse_sensitivity: 0.01,
         }
@@ -306,8 +370,66 @@ impl<T: Game + 'static> GameState<T> {
                 Some(state) => state,
             };
 
-            state.process_event(event, window_target, control_flow);
+            state.receive_event(event, window_target, control_flow);
         });
+    }
+
+    fn is_input_event(event: &Event<'_, ()>) -> bool {
+        match event {
+            winit::event::Event::WindowEvent { event, .. } => match event {
+                winit::event::WindowEvent::CursorMoved { .. }
+                | winit::event::WindowEvent::CursorEntered { .. }
+                | winit::event::WindowEvent::CursorLeft { .. }
+                | winit::event::WindowEvent::MouseWheel { .. }
+                | winit::event::WindowEvent::MouseInput { .. }
+                | winit::event::WindowEvent::TouchpadRotate { .. }
+                | winit::event::WindowEvent::TouchpadPressure { .. }
+                | winit::event::WindowEvent::AxisMotion { .. }
+                | winit::event::WindowEvent::Touch(_)
+                | winit::event::WindowEvent::ReceivedCharacter(_)
+                | winit::event::WindowEvent::KeyboardInput { .. }
+                | winit::event::WindowEvent::ModifiersChanged(_)
+                | winit::event::WindowEvent::Ime(_)
+                | winit::event::WindowEvent::TouchpadMagnify { .. }
+                | winit::event::WindowEvent::SmartMagnify { .. } => true,
+                _ => false,
+            },
+            winit::event::Event::DeviceEvent { event, .. } => match event {
+                winit::event::DeviceEvent::MouseMotion { .. }
+                | winit::event::DeviceEvent::MouseWheel { .. }
+                | winit::event::DeviceEvent::Motion { .. }
+                | winit::event::DeviceEvent::Button { .. }
+                | winit::event::DeviceEvent::Key(_)
+                | winit::event::DeviceEvent::Text { .. } => true,
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
+    fn receive_event(
+        &mut self,
+        mut event: Event<'_, ()>,
+        window_target: &EventLoopWindowTarget<()>,
+        control_flow: &mut ControlFlow,
+    ) {
+        // Discard events that aren't for us
+        event = match event {
+            Event::WindowEvent { window_id, .. } if window_id != self.window().id() => return,
+            event => event,
+        };
+
+        // We filter all window events through the game to allow it to integrate with other libraries, such as egui.
+        // But only send keyboard and mouse input events to UI if the mouse isn't captured.
+        let should_send_input = self.input_mode.should_propogate_raw_input();
+        if should_send_input || !Self::is_input_event(&event) {
+            event = match self.game.process_raw_event(event) {
+                None => return,
+                Some(event) => event,
+            };
+        }
+
+        self.process_event(event, window_target, control_flow)
     }
 
     fn process_event(
@@ -317,16 +439,18 @@ impl<T: Game + 'static> GameState<T> {
         control_flow: &mut ControlFlow,
     ) {
         match event {
-            Event::WindowEvent {
-                ref event,
-                window_id,
-            } if window_id == self.window().id() => match event {
+            Event::WindowEvent { event, .. } => match event {
                 WindowEvent::CloseRequested | WindowEvent::Destroyed => self.request_exit(),
+                // (0, 0) means minimized on Windows.
+                WindowEvent::Resized(winit::dpi::PhysicalSize {
+                    width: 0,
+                    height: 0,
+                }) => {}
                 WindowEvent::Resized(physical_size) => {
-                    self.resize(*physical_size);
+                    self.resize(physical_size);
                 }
                 WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
-                    self.resize(**new_inner_size);
+                    self.resize(*new_inner_size);
                 }
                 WindowEvent::ModifiersChanged(modifiers) => {
                     let changed = self.set_current_input_modifiers(modifiers);
@@ -339,7 +463,7 @@ impl<T: Game + 'static> GameState<T> {
                     device_id: _device_id,
                     input,
                     is_synthetic,
-                } if !*is_synthetic => {
+                } if !is_synthetic => {
                     if let Some(key) = input.virtual_keycode {
                         let activation = match input.state {
                             winit::event::ElementState::Pressed => 1.0,
@@ -380,7 +504,8 @@ impl<T: Game + 'static> GameState<T> {
                     self.last_cursor_position = position.cast();
 
                     // Winit doesn't support cursor locking on a lot of platforms, so do it manually.
-                    if self.grab_cursor {
+                    let should_lock_cursor = self.input_mode.should_lock_cursor();
+                    if should_lock_cursor {
                         let mut center = self.data.window.inner_size();
                         center.width /= 2;
                         center.height /= 2;
@@ -442,7 +567,7 @@ impl<T: Game + 'static> GameState<T> {
 
     fn set_current_input_modifiers(
         &mut self,
-        modifiers: &winit::event::ModifiersState,
+        modifiers: winit::event::ModifiersState,
     ) -> Vec<(input::KeyCode, input::LinearInputActivation)> {
         let mut changed = Vec::new();
         let mut check = |old, new, key| {
@@ -520,6 +645,9 @@ impl<T: Game + 'static> GameState<T> {
         inputted: input::LinearInputType,
         activation: input::LinearInputActivation,
     ) {
+        if !self.input_mode.should_handle_input() {
+            return;
+        }
         let input_value = self.input_map.get_linear(&inputted);
         if let Some(input_value) = input_value {
             self.game
@@ -532,6 +660,9 @@ impl<T: Game + 'static> GameState<T> {
         inputted: input::VectorInputType,
         activation: input::VectorInputActivation,
     ) {
+        if !self.input_mode.should_handle_input() {
+            return;
+        }
         let input_value = self.input_map.get_vector(&inputted);
         if let Some(input_value) = input_value {
             self.game
@@ -549,9 +680,11 @@ impl<T: Game + 'static> GameState<T> {
         while let Ok(cmd) = self.command_receiver.try_recv() {
             match cmd {
                 GameCommand::Exit => self.data.exit_flag.set(),
-                GameCommand::GrabCursor(should_grab) => {
-                    self.grab_cursor = should_grab;
-                    self.data.window.set_cursor_visible(!should_grab);
+                GameCommand::SetInputMode(input_mode) => {
+                    self.input_mode = input_mode;
+
+                    let should_show_cursor = !input_mode.should_hide_cursor();
+                    self.data.window.set_cursor_visible(should_show_cursor);
                 }
                 GameCommand::SetMouseSensitivity(new_sensitivity) => {
                     self.mouse_sensitivity = new_sensitivity;
@@ -568,7 +701,14 @@ impl<T: Game + 'static> GameState<T> {
 
         self.game.render_to(&self.data, view);
 
+        let was_suboptimal = output.suboptimal;
+
         output.present();
+
+        if was_suboptimal {
+            // Force recreation
+            return Err(wgpu::SurfaceError::Lost);
+        }
         Ok(())
     }
 
