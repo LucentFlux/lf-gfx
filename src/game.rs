@@ -2,7 +2,7 @@
 pub(crate) mod input;
 pub(crate) mod window_size;
 
-use std::sync::{atomic::AtomicBool, Arc};
+use std::sync::{atomic::AtomicBool, Arc, Mutex};
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
@@ -110,7 +110,6 @@ pub enum GameCommand {
 
 pub struct GameData {
     pub command_sender: flume::Sender<GameCommand>,
-    pub surface: wgpu::Surface,
     pub surface_format: wgpu::TextureFormat,
     pub limits: wgpu::Limits,
     pub config: wgpu::SurfaceConfiguration,
@@ -196,6 +195,8 @@ pub(crate) struct GameState<T: Game> {
     game: T,
     input_map: input::InputMap<T::LinearInputType, T::VectorInputType>,
     command_receiver: flume::Receiver<GameCommand>,
+
+    surface: Mutex<wgpu::Surface>,
 
     // While true, disallows cursor movement
     input_mode: InputMode,
@@ -317,7 +318,6 @@ impl<T: Game + 'static> GameState<T> {
 
         let data = GameData {
             command_sender,
-            surface,
             surface_format,
             limits,
             config,
@@ -335,6 +335,7 @@ impl<T: Game + 'static> GameState<T> {
             data,
             current_modifiers: input::ModifiersState::default(),
             game,
+            surface: Mutex::new(surface),
             command_receiver,
             input_map,
             input_mode: InputMode::Unified,
@@ -557,9 +558,18 @@ impl<T: Game + 'static> GameState<T> {
             self.data.size = new_size;
             self.data.config.width = new_size.width;
             self.data.config.height = new_size.height;
+
+            let lock = self.surface.lock().unwrap();
+
+            // Block until existing work is done.
+            let (s, r) = flume::bounded(1);
             self.data
-                .surface
-                .configure(&self.data.device, &self.data.config);
+                .queue
+                .on_submitted_work_done(move || s.send(()).unwrap());
+            self.data.device.poll(wgpu::Maintain::Wait);
+            let _ = r.recv().unwrap();
+
+            lock.configure(&self.data.device, &self.data.config);
 
             self.game.window_resize(&self.data, new_size)
         }
@@ -694,16 +704,22 @@ impl<T: Game + 'static> GameState<T> {
     }
 
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
-        let output = self.data.surface.get_current_texture()?;
-        let view = output
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
+        let lock = self.surface.lock().unwrap();
 
-        self.game.render_to(&self.data, view);
+        let was_suboptimal = {
+            let output = lock.get_current_texture()?;
+            let view = output
+                .texture
+                .create_view(&wgpu::TextureViewDescriptor::default());
 
-        let was_suboptimal = output.suboptimal;
+            self.game.render_to(&self.data, view);
 
-        output.present();
+            let was_suboptimal = output.suboptimal;
+
+            output.present();
+
+            was_suboptimal
+        };
 
         if was_suboptimal {
             // Force recreation
