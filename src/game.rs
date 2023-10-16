@@ -4,9 +4,6 @@ pub(crate) mod window_size;
 
 use std::sync::{atomic::AtomicBool, Arc, Mutex};
 
-#[cfg(target_arch = "wasm32")]
-use wasm_bindgen::prelude::*;
-
 use async_trait::async_trait;
 use thiserror::Error;
 use winit::{
@@ -19,12 +16,6 @@ use winit::{
 use crate::LfLimitsExt;
 
 use self::input::{InputMap, MouseInputType, VectorInputActivation, VectorInputType};
-
-#[cfg(target_arch = "wasm32")]
-#[wasm_bindgen]
-extern "C" {
-    fn alert(s: &str);
-}
 
 #[derive(Debug, Error)]
 pub enum GameInitialisationFailure {
