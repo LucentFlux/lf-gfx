@@ -1,19 +1,18 @@
 //! A 'Game' in this context is a program that uses both wgpu and winit.
 pub(crate) mod input;
-pub(crate) mod window_size;
+pub(crate) mod window;
 
 use std::sync::{atomic::AtomicBool, Arc, Mutex};
 
-use async_trait::async_trait;
 use thiserror::Error;
 use winit::{
     dpi::PhysicalPosition,
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoop, EventLoopWindowTarget},
-    window::{Window, WindowBuilder},
+    window::Window,
 };
 
-use crate::LfLimitsExt;
+use crate::{game::window::GameWindow, LfLimitsExt};
 
 use self::input::{InputMap, MouseInputType, VectorInputActivation, VectorInputType};
 
@@ -105,7 +104,7 @@ pub struct GameData {
     pub limits: wgpu::Limits,
     pub config: wgpu::SurfaceConfiguration,
     pub size: winit::dpi::PhysicalSize<u32>,
-    pub window: Window,
+    pub window: GameWindow,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     pub exit_flag: ExitFlag,
@@ -114,7 +113,6 @@ pub struct GameData {
 /// All of the callbacks required to implement a game. This API is built on top of a message passing
 /// event system, and so calls to the below methods may be made concurrently, in any order, and on
 /// different threads.
-#[async_trait]
 pub trait Game: Sized {
     /// Data processed before the window exists. This should be minimal and kept to `mpsc` message reception from initialiser threads.
     type InitData;
@@ -122,20 +120,17 @@ pub trait Game: Sized {
     type LinearInputType;
     type VectorInputType;
 
+    fn title() -> String;
+
     fn target_limits() -> wgpu::Limits {
         wgpu::Limits::downlevel_webgl2_defaults()
     }
     fn default_inputs() -> InputMap<Self::LinearInputType, Self::VectorInputType>;
 
-    async fn init(data: &GameData, init: Self::InitData) -> Self;
+    fn init(data: &GameData, init: Self::InitData) -> Self;
 
     fn on_init_failure(error: GameInitialisationFailure) -> ! {
         let error = format!("failed to initialise: {}", error);
-
-        #[cfg(target_arch = "wasm32")]
-        {
-            alert(&error);
-        }
 
         panic!("{}", error);
     }
@@ -199,10 +194,8 @@ pub(crate) struct GameState<T: Game> {
 
 impl<T: Game + 'static> GameState<T> {
     // Creating some of the wgpu types requires async code
-    async fn new(init: T::InitData, window_target: &EventLoopWindowTarget<()>) -> Self {
-        let window = WindowBuilder::new().build(window_target).unwrap();
-
-        let size = window.inner_size();
+    async fn new(init: T::InitData, window: GameWindow) -> Self {
+        let size = (&window).inner_size();
 
         // The instance is a handle to our GPU
         // Backends::all => Vulkan + Metal + DX12 + Browser WebGPU
@@ -211,11 +204,22 @@ impl<T: Game + 'static> GameState<T> {
             dx12_shader_compiler: wgpu::util::dx12_shader_compiler_from_env().unwrap_or_default(),
         });
 
+        let surface;
+        // On wasm, we need to insert ourselves into the DOM
+        #[cfg(target_arch = "wasm32")]
+        {
+            surface = instance
+                .create_surface_from_canvas(window.canvas())
+                .unwrap();
+        }
         // # Safety
         //
         // The surface needs to live as long as the window that created it.
         // State owns the window so this should be safe.
-        let surface = unsafe { instance.create_surface(&window) }.unwrap();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            surface = unsafe { instance.create_surface(&*window) }.unwrap();
+        }
 
         let adapter = match instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -230,7 +234,7 @@ impl<T: Game + 'static> GameState<T> {
         };
 
         let available_limits = if cfg!(target_arch = "wasm32") {
-            wgpu::Limits::downlevel_defaults()
+            wgpu::Limits::downlevel_webgl2_defaults()
         } else {
             adapter.limits()
         };
@@ -318,7 +322,7 @@ impl<T: Game + 'static> GameState<T> {
             queue,
             exit_flag: ExitFlag::new(),
         };
-        let game = T::init(&data, init).await;
+        let game = T::init(&data, init);
 
         let input_map = T::default_inputs();
 
@@ -341,7 +345,8 @@ impl<T: Game + 'static> GameState<T> {
         // Built on first `Event::Resumed`
         // Taken out on `Event::LoopDestroyed`
         let mut state: Option<Self> = None;
-        let mut init = Some(init);
+        let (state_transmission, state_reception) = flume::bounded(1);
+        let mut init = Some((init, state_transmission));
 
         event_loop.run(move |event, window_target, control_flow| {
             if event == Event::LoopDestroyed {
@@ -349,16 +354,33 @@ impl<T: Game + 'static> GameState<T> {
                 return;
             }
 
-            // Resume always emmitted to begin with
+            // Resume always emmitted to begin with - use it to begin an async method to create the game state.
             if state.is_none() && event == Event::Resumed {
-                state = Some(pollster::block_on(Self::new(
-                    init.take().expect("should only initialise once"),
-                    window_target,
-                )));
+                if let Some((init, state_transmission)) = init.take() {
+                    async fn build_state<T: Game + 'static>(
+                        init: T::InitData,
+                        window: GameWindow,
+                        state_transmission: flume::Sender<GameState<T>>,
+                    ) {
+                        let state = GameState::<T>::new(init, window).await;
+                        state_transmission.try_send(state).unwrap();
+                    }
+
+                    let window = GameWindow::new::<T>(window_target);
+                    crate::block_on(build_state::<T>(init, window, state_transmission));
+                }
             }
 
+            // On any future events, check if the game state has been created and receive it.
             let state = match state.as_mut() {
-                None => return,
+                None => {
+                    if let Ok(new_state) = state_reception.try_recv() {
+                        state = Some(new_state);
+                        state.as_mut().unwrap()
+                    } else {
+                        return;
+                    }
+                }
                 Some(state) => state,
             };
 

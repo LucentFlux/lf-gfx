@@ -2,23 +2,28 @@ mod fragment_only;
 mod game;
 mod limits;
 
+#[cfg(target_arch = "wasm32")]
+mod wasm;
+
 pub use fragment_only::FragmentOnlyRenderBundleEncoder;
 pub use fragment_only::FragmentOnlyRenderBundleEncoderDescriptor;
 pub use fragment_only::FragmentOnlyRenderPass;
 pub use fragment_only::FragmentOnlyRenderPassDescriptor;
 pub use fragment_only::FragmentOnlyRenderPipeline;
 pub use fragment_only::FragmentOnlyRenderPipelineDescriptor;
-pub use game::window_size::WindowSizeDependent;
+pub use game::window::GameWindow;
+pub use game::window::WindowSizeDependent;
 pub use game::ExitFlag;
 pub use game::Game;
 pub use game::GameCommand;
 pub use game::GameData;
 pub use game::GameInitialisationFailure;
 pub use game::InputMode;
-use wgpu::util::DeviceExt;
 pub mod input {
     pub use crate::game::input::*;
 }
+
+use wgpu::util::DeviceExt;
 
 fn next_multiple_of(
     value: wgpu::BufferAddress,
@@ -28,6 +33,15 @@ fn next_multiple_of(
         0 => value,
         r => value + (multiple - r),
     }
+}
+
+/// Provides equivalent functionality to `pollster::block_on`, but without crashing on the web.
+pub fn block_on(future: impl std::future::Future<Output = ()> + 'static) {
+    #[cfg(target_arch = "wasm32")]
+    wasm_bindgen_futures::spawn_local(future);
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pollster::block_on(future)
 }
 
 /// Some operations care about alignment in such a way that it is often easier to simply round all buffer sizes up to the nearest
@@ -97,6 +111,9 @@ pub trait LfDeviceExt: sealed::SealedDevice {
         &self,
         desc: wgpu::ShaderModuleDescriptor,
     ) -> wgpu::ShaderModule;
+
+    /// Pops an error scope and asserts that it isn't an error.
+    fn assert_pop_error_scope(&self, msg: impl Into<String>);
 }
 
 impl LfDeviceExt for wgpu::Device {
@@ -143,6 +160,20 @@ impl LfDeviceExt for wgpu::Device {
         {
             self.create_shader_module_unchecked(desc)
         }
+    }
+
+    fn assert_pop_error_scope(&self, msg: impl Into<String>) {
+        let f = self.pop_error_scope();
+        async fn check_device_scope(
+            f: impl std::future::Future<Output = Option<wgpu::Error>>,
+            msg: String,
+        ) {
+            let res = f.await;
+            if let Some(e) = res {
+                panic!("error scope failure - {}: {:?}", msg, e)
+            }
+        }
+        block_on(check_device_scope(f, msg.into()));
     }
 }
 
