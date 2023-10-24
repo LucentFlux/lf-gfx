@@ -4,6 +4,7 @@ pub(crate) mod window;
 
 use std::sync::{atomic::AtomicBool, Arc, Mutex};
 
+use log::info;
 use thiserror::Error;
 use winit::{
     dpi::PhysicalPosition,
@@ -260,6 +261,9 @@ impl<T: Game + 'static> GameState<T> {
         features |= adapter.features().intersection(
             wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES,
         );
+
+        info!("info: {:#?}", adapter.get_info());
+        info!("limits: {:#?}", adapter.limits());
 
         let (device, queue) = match adapter
             .request_device(
