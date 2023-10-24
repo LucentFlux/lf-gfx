@@ -35,13 +35,13 @@ fn next_multiple_of(
     }
 }
 
-/// Provides equivalent functionality to `pollster::block_on`, but without crashing on the web.
+/// Provides semi-equivalent functionality to `pollster::block_on`, but without crashing on the web.
 pub fn block_on(future: impl std::future::Future<Output = ()> + 'static) {
     #[cfg(target_arch = "wasm32")]
     wasm_bindgen_futures::spawn_local(future);
 
     #[cfg(not(target_arch = "wasm32"))]
-    pollster::block_on(future)
+    pollster::block_on(future);
 }
 
 /// Some operations care about alignment in such a way that it is often easier to simply round all buffer sizes up to the nearest
@@ -338,7 +338,7 @@ pub trait LfGameExt: sealed::SealedGame {
 impl<T: Game + 'static> LfGameExt for T {
     type InitData = T::InitData;
 
-    /// Runs the game.
+    /// Runs the game. Must be executed on the main thread on Web, and will not block the main thread (although will loop until the game is completed).
     fn run(init: T::InitData) {
         game::GameState::<T>::run(init);
     }
