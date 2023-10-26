@@ -465,9 +465,11 @@ impl<T: Game + 'static> GameState<T> {
                     height: 0,
                 }) => {}
                 WindowEvent::Resized(physical_size) => {
+                    log::debug!("Resized: {:?}", physical_size);
                     self.resize(physical_size);
                 }
                 WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
+                    log::debug!("Scale Factor Changed: {:?}", new_inner_size);
                     self.resize(*new_inner_size);
                 }
                 WindowEvent::ModifiersChanged(modifiers) => {

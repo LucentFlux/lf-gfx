@@ -1,9 +1,9 @@
 [package]
 name = "lf-gfx"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 license = "MIT"
-description = "A collection of utilities that we use. "
+description = "A collection of utilities that we use."
 homepage = "https://github.com/LucentFlux/lf-gfx"
 repository = "https://github.com/LucentFlux/lf-gfx"
 readme = "README.md"
