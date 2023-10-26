@@ -171,6 +171,8 @@ pub struct FragmentOnlyRenderPassDescriptor<'tex, 'desc> {
     pub label: wgpu::Label<'desc>,
     pub color_attachments: &'desc [Option<wgpu::RenderPassColorAttachment<'tex>>],
     pub stencil_attachment: Option<FragmentOnlyRenderPassStencilAttachment<'tex>>,
+    pub timestamp_writes: Option<wgpu::RenderPassTimestampWrites<'desc>>,
+    pub occlusion_query_set: Option<&'tex wgpu::QuerySet>,
 }
 
 #[derive(Debug)]
@@ -193,6 +195,8 @@ impl<'a> FragmentOnlyRenderPass<'a> {
                     stencil_ops: attachment.stencil_ops,
                 }
             }),
+            timestamp_writes: desc.timestamp_writes.clone(),
+            occlusion_query_set: desc.occlusion_query_set,
         };
 
         let renderpass = command_encoder.begin_render_pass(&desc);

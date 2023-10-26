@@ -46,6 +46,7 @@ macro_rules! binop_limits {
                 max_compute_workgroup_size_z,
                 max_compute_workgroups_per_dimension,
                 max_push_constant_size,
+                max_non_sampler_bindings,
             }
             min {
                 min_uniform_buffer_offset_alignment,
