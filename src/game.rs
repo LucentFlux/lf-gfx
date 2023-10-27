@@ -9,8 +9,9 @@ use log::info;
 use thiserror::Error;
 use winit::{
     dpi::PhysicalPosition,
-    event::{Event, WindowEvent},
-    event_loop::{ControlFlow, EventLoop, EventLoopWindowTarget},
+    event::{DeviceEvent, Event, WindowEvent},
+    event_loop::{EventLoop, EventLoopWindowTarget},
+    keyboard::PhysicalKey,
     window::Window,
 };
 
@@ -140,7 +141,7 @@ pub trait Game: Sized {
     /// to allow for egui integration, among others.
     ///
     /// This method only receives input events if the cursor is not captured, to avoid UI glitches.
-    fn process_raw_event<'a, T>(&mut self, event: Event<'a, T>) -> Option<Event<'a, T>> {
+    fn process_raw_event<'a, T>(&mut self, event: Event<T>) -> Option<Event<T>> {
         Some(event)
     }
 
@@ -178,7 +179,6 @@ pub trait Game: Sized {
 /// implementation
 pub(crate) struct GameState<T: Game> {
     data: GameData,
-    current_modifiers: input::ModifiersState,
     game: T,
     input_map: input::InputMap<T::LinearInputType, T::VectorInputType>,
     command_receiver: flume::Receiver<GameCommand>,
@@ -336,7 +336,6 @@ impl<T: Game + 'static> GameState<T> {
 
         Self {
             data,
-            current_modifiers: input::ModifiersState::default(),
             game,
             surface,
             command_receiver,
@@ -348,7 +347,7 @@ impl<T: Game + 'static> GameState<T> {
     }
 
     pub(crate) fn run(init: T::InitData) {
-        let event_loop = EventLoop::new();
+        let event_loop = EventLoop::new().expect("could not create game loop");
 
         // Built on first `Event::Resumed`
         // Taken out on `Event::LoopDestroyed`
@@ -356,85 +355,80 @@ impl<T: Game + 'static> GameState<T> {
         let (state_transmission, state_reception) = flume::bounded(1);
         let mut init = Some((init, state_transmission));
 
-        event_loop.run(move |event, window_target, control_flow| {
-            if event == Event::LoopDestroyed {
-                state.take().expect("loop is destroyed once").finished();
-                return;
-            }
-
-            // Resume always emmitted to begin with - use it to begin an async method to create the game state.
-            if state.is_none() && event == Event::Resumed {
-                if let Some((init, state_transmission)) = init.take() {
-                    async fn build_state<T: Game + 'static>(
-                        init: T::InitData,
-                        window: GameWindow,
-                        state_transmission: flume::Sender<GameState<T>>,
-                    ) {
-                        let state = GameState::<T>::new(init, window).await;
-                        state_transmission.try_send(state).unwrap();
-                    }
-
-                    let window = GameWindow::new::<T>(window_target);
-                    crate::block_on(build_state::<T>(init, window, state_transmission));
+        event_loop
+            .run(move |event, window_target| {
+                if event == Event::LoopExiting {
+                    state.take().expect("loop is destroyed once").finished();
+                    return;
                 }
-            }
 
-            // On any future events, check if the game state has been created and receive it.
-            let state = match state.as_mut() {
-                None => {
-                    if let Ok(new_state) = state_reception.try_recv() {
-                        state = Some(new_state);
-                        state.as_mut().unwrap()
-                    } else {
-                        return;
+                // Resume always emmitted to begin with - use it to begin an async method to create the game state.
+                if state.is_none() && event == Event::Resumed {
+                    if let Some((init, state_transmission)) = init.take() {
+                        async fn build_state<T: Game + 'static>(
+                            init: T::InitData,
+                            window: GameWindow,
+                            state_transmission: flume::Sender<GameState<T>>,
+                        ) {
+                            let state = GameState::<T>::new(init, window).await;
+                            state_transmission.try_send(state).unwrap();
+                        }
+
+                        let window = GameWindow::new::<T>(window_target);
+                        crate::block_on(build_state::<T>(init, window, state_transmission));
                     }
                 }
-                Some(state) => state,
-            };
 
-            state.receive_event(event, window_target, control_flow);
-        });
+                // On any future events, check if the game state has been created and receive it.
+                let state = match state.as_mut() {
+                    None => {
+                        if let Ok(new_state) = state_reception.try_recv() {
+                            state = Some(new_state);
+                            state.as_mut().unwrap()
+                        } else {
+                            return;
+                        }
+                    }
+                    Some(state) => state,
+                };
+
+                state.receive_event(event, window_target);
+            })
+            .expect("run err");
     }
 
-    fn is_input_event(event: &Event<'_, ()>) -> bool {
+    fn is_input_event(event: &Event<()>) -> bool {
         match event {
             winit::event::Event::WindowEvent { event, .. } => match event {
-                winit::event::WindowEvent::CursorMoved { .. }
-                | winit::event::WindowEvent::CursorEntered { .. }
-                | winit::event::WindowEvent::CursorLeft { .. }
-                | winit::event::WindowEvent::MouseWheel { .. }
-                | winit::event::WindowEvent::MouseInput { .. }
-                | winit::event::WindowEvent::TouchpadRotate { .. }
-                | winit::event::WindowEvent::TouchpadPressure { .. }
-                | winit::event::WindowEvent::AxisMotion { .. }
-                | winit::event::WindowEvent::Touch(_)
-                | winit::event::WindowEvent::ReceivedCharacter(_)
-                | winit::event::WindowEvent::KeyboardInput { .. }
-                | winit::event::WindowEvent::ModifiersChanged(_)
-                | winit::event::WindowEvent::Ime(_)
-                | winit::event::WindowEvent::TouchpadMagnify { .. }
-                | winit::event::WindowEvent::SmartMagnify { .. } => true,
+                WindowEvent::CursorMoved { .. }
+                | WindowEvent::CursorEntered { .. }
+                | WindowEvent::CursorLeft { .. }
+                | WindowEvent::MouseWheel { .. }
+                | WindowEvent::MouseInput { .. }
+                | WindowEvent::TouchpadRotate { .. }
+                | WindowEvent::TouchpadPressure { .. }
+                | WindowEvent::AxisMotion { .. }
+                | WindowEvent::Touch(_)
+                | WindowEvent::KeyboardInput { .. }
+                | WindowEvent::ModifiersChanged(_)
+                | WindowEvent::Ime(_)
+                | WindowEvent::TouchpadMagnify { .. }
+                | WindowEvent::SmartMagnify { .. } => true,
                 _ => false,
             },
             winit::event::Event::DeviceEvent { event, .. } => match event {
-                winit::event::DeviceEvent::MouseMotion { .. }
-                | winit::event::DeviceEvent::MouseWheel { .. }
-                | winit::event::DeviceEvent::Motion { .. }
-                | winit::event::DeviceEvent::Button { .. }
-                | winit::event::DeviceEvent::Key(_)
-                | winit::event::DeviceEvent::Text { .. } => true,
+                DeviceEvent::MouseMotion { .. }
+                | DeviceEvent::MouseWheel { .. }
+                | DeviceEvent::Motion { .. }
+                | DeviceEvent::Button { .. }
+                | DeviceEvent::Key(_) => true,
                 _ => false,
             },
             _ => false,
         }
     }
 
-    fn receive_event(
-        &mut self,
-        mut event: Event<'_, ()>,
-        window_target: &EventLoopWindowTarget<()>,
-        control_flow: &mut ControlFlow,
-    ) {
+    fn receive_event(&mut self, mut event: Event<()>, window_target: &EventLoopWindowTarget<()>) {
         // Discard events that aren't for us
         event = match event {
             Event::WindowEvent { window_id, .. } if window_id != self.window().id() => return,
@@ -451,125 +445,117 @@ impl<T: Game + 'static> GameState<T> {
             };
         }
 
-        self.process_event(event, window_target, control_flow)
+        self.process_event(event, window_target)
     }
 
-    fn process_event(
-        &mut self,
-        event: Event<'_, ()>,
-        _window_target: &EventLoopWindowTarget<()>,
-        control_flow: &mut ControlFlow,
-    ) {
+    fn process_event(&mut self, event: Event<()>, window_target: &EventLoopWindowTarget<()>) {
         match event {
-            Event::WindowEvent { event, .. } => match event {
-                WindowEvent::CloseRequested | WindowEvent::Destroyed => self.request_exit(),
-                // (0, 0) means minimized on Windows.
-                WindowEvent::Resized(winit::dpi::PhysicalSize {
-                    width: 0,
-                    height: 0,
-                }) => {}
-                WindowEvent::Resized(physical_size) => {
-                    log::debug!("Resized: {:?}", physical_size);
-                    self.resize(physical_size);
-                }
-                WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
-                    log::debug!("Scale Factor Changed: {:?}", new_inner_size);
-                    self.resize(*new_inner_size);
-                }
-                WindowEvent::ModifiersChanged(modifiers) => {
-                    let changed = self.set_current_input_modifiers(modifiers);
-
-                    for (key, activation) in changed {
-                        self.linear_input(input::LinearInputType::KnownKeyboard(key), activation);
+            Event::WindowEvent { event, window_id } if window_id == self.window().id() => {
+                match event {
+                    WindowEvent::CloseRequested | WindowEvent::Destroyed => self.request_exit(),
+                    // (0, 0) means minimized on Windows.
+                    WindowEvent::Resized(winit::dpi::PhysicalSize {
+                        width: 0,
+                        height: 0,
+                    }) => {}
+                    WindowEvent::Resized(physical_size) => {
+                        log::debug!("Resized: {:?}", physical_size);
+                        self.resize(physical_size);
                     }
-                }
-                WindowEvent::KeyboardInput {
-                    device_id: _device_id,
-                    input,
-                    is_synthetic,
-                } if !is_synthetic => {
-                    if let Some(key) = input.virtual_keycode {
-                        let activation = match input.state {
-                            winit::event::ElementState::Pressed => 1.0,
-                            winit::event::ElementState::Released => 0.0,
-                        };
-                        let activation =
-                            input::LinearInputActivation::try_from(activation).expect("from const");
-                        self.linear_input(
-                            input::LinearInputType::KnownKeyboard(key.into()),
-                            activation,
-                        );
-                    } else {
-                        eprintln!("unknown key code, scan code: {:?}", input.scancode)
+                    WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                        log::debug!("Scale Factor Changed: {:?}", scale_factor);
+                        //self.resize(*new_inner_size);
                     }
-                }
-                WindowEvent::CursorMoved {
-                    device_id: _device_id,
-                    position,
-                    ..
-                } => {
-                    let delta_x = position.x - self.last_cursor_position.x;
-                    let delta_y = position.y - self.last_cursor_position.y;
-
-                    // Only trigger a single linear event, depending on the largest movement
-                    if delta_x.abs() > 2.0 || delta_y.abs() > 2.0 {
-                        self.process_linear_mouse_movement(delta_x, delta_y);
+                    WindowEvent::KeyboardInput {
+                        device_id: _device_id,
+                        event,
+                        is_synthetic,
+                    } if !is_synthetic && !event.repeat => {
+                        if let PhysicalKey::Code(key) = event.physical_key {
+                            let activation = match event.state {
+                                winit::event::ElementState::Pressed => 1.0,
+                                winit::event::ElementState::Released => 0.0,
+                            };
+                            let activation = input::LinearInputActivation::try_from(activation)
+                                .expect("from const");
+                            self.linear_input(
+                                input::LinearInputType::KnownKeyboard(key.into()),
+                                activation,
+                            );
+                        } else {
+                            eprintln!("unknown key code, scan code: {:?}", event.physical_key)
+                        }
                     }
+                    WindowEvent::CursorMoved {
+                        device_id: _device_id,
+                        position,
+                        ..
+                    } => {
+                        let delta_x = position.x - self.last_cursor_position.x;
+                        let delta_y = position.y - self.last_cursor_position.y;
 
-                    // Also trigger a vector input
-                    self.vector_input(
-                        VectorInputType::MouseMove,
-                        VectorInputActivation::clamp(
-                            delta_x as f32 * self.mouse_sensitivity,
-                            delta_y as f32 * self.mouse_sensitivity,
-                        ),
-                    );
-
-                    self.last_cursor_position = position.cast();
-
-                    // Winit doesn't support cursor locking on a lot of platforms, so do it manually.
-                    let should_lock_cursor = self.input_mode.should_lock_cursor();
-                    if should_lock_cursor {
-                        let mut center = self.data.window.inner_size();
-                        center.width /= 2;
-                        center.height /= 2;
-
-                        let old_pos = position.cast::<u32>();
-                        let new_pos = PhysicalPosition::new(center.width, center.height);
-
-                        if old_pos != new_pos {
-                            // Ignore result - if it doesn't work then there's not much we can do.
-                            let _ = self.data.window.set_cursor_position(new_pos);
+                        // Only trigger a single linear event, depending on the largest movement
+                        if delta_x.abs() > 2.0 || delta_y.abs() > 2.0 {
+                            self.process_linear_mouse_movement(delta_x, delta_y);
                         }
 
-                        self.last_cursor_position = new_pos.cast();
+                        // Also trigger a vector input
+                        self.vector_input(
+                            VectorInputType::MouseMove,
+                            VectorInputActivation::clamp(
+                                delta_x as f32 * self.mouse_sensitivity,
+                                delta_y as f32 * self.mouse_sensitivity,
+                            ),
+                        );
+
+                        self.last_cursor_position = position.cast();
+
+                        // Winit doesn't support cursor locking on a lot of platforms, so do it manually.
+                        let should_lock_cursor = self.input_mode.should_lock_cursor();
+                        if should_lock_cursor {
+                            let mut center = self.data.window.inner_size();
+                            center.width /= 2;
+                            center.height /= 2;
+
+                            let old_pos = position.cast::<u32>();
+                            let new_pos = PhysicalPosition::new(center.width, center.height);
+
+                            if old_pos != new_pos {
+                                // Ignore result - if it doesn't work then there's not much we can do.
+                                let _ = self.data.window.set_cursor_position(new_pos);
+                            }
+
+                            self.last_cursor_position = new_pos.cast();
+                        }
                     }
+                    WindowEvent::RedrawRequested => {
+                        self.data.device.poll(wgpu::MaintainBase::Poll);
+
+                        self.pre_frame_update();
+
+                        // Check everything the game implementation can send to us
+                        if self.data.exit_flag.get() {
+                            window_target.exit();
+                        }
+
+                        let res = self.render();
+                        match res {
+                            Ok(_) => {}
+                            Err(wgpu::SurfaceError::Lost) => self.resize(self.data.size),
+                            Err(wgpu::SurfaceError::OutOfMemory) => {
+                                window_target.exit();
+                            }
+                            // All other errors (Outdated, Timeout) should be resolved by the next frame
+                            Err(e) => eprintln!("{:?}", e),
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
-            },
+            }
             Event::DeviceEvent { device_id, event } => {
                 log::debug!("device event: {device_id:?}::{event:?}");
             }
-            Event::RedrawRequested(window_id) if window_id == self.window().id() => {
-                self.data.device.poll(wgpu::MaintainBase::Poll);
-
-                self.pre_frame_update();
-
-                // Check everything the game implementation can send to us
-                if self.data.exit_flag.get() {
-                    *control_flow = ControlFlow::Exit;
-                }
-
-                let res = self.render();
-                match res {
-                    Ok(_) => {}
-                    Err(wgpu::SurfaceError::Lost) => self.resize(self.data.size),
-                    Err(wgpu::SurfaceError::OutOfMemory) => *control_flow = ControlFlow::Exit,
-                    // All other errors (Outdated, Timeout) should be resolved by the next frame
-                    Err(e) => eprintln!("{:?}", e),
-                }
-            }
-            Event::MainEventsCleared => {
+            Event::AboutToWait => {
                 self.window().request_redraw();
             }
             _ => {}
@@ -588,53 +574,6 @@ impl<T: Game + 'static> GameState<T> {
 
             self.game.window_resize(&self.data, new_size)
         }
-    }
-
-    fn set_current_input_modifiers(
-        &mut self,
-        modifiers: winit::event::ModifiersState,
-    ) -> Vec<(input::KeyCode, input::LinearInputActivation)> {
-        let mut changed = Vec::new();
-        let mut check = |old, new, key| {
-            if old != new {
-                let activation = if old {
-                    input::LinearInputActivation::try_from(0.0).unwrap()
-                } else {
-                    input::LinearInputActivation::try_from(1.0).unwrap()
-                };
-                changed.push((key, activation))
-            }
-        };
-
-        check(
-            self.current_modifiers.shift,
-            modifiers.shift(),
-            input::KeyCode::Shift,
-        );
-        check(
-            self.current_modifiers.ctrl,
-            modifiers.ctrl(),
-            input::KeyCode::Ctrl,
-        );
-        check(
-            self.current_modifiers.alt,
-            modifiers.alt(),
-            input::KeyCode::Alt,
-        );
-        check(
-            self.current_modifiers.logo,
-            modifiers.logo(),
-            input::KeyCode::Logo,
-        );
-
-        self.current_modifiers = input::ModifiersState {
-            shift: modifiers.shift(),
-            ctrl: modifiers.ctrl(),
-            alt: modifiers.alt(),
-            logo: modifiers.logo(),
-        };
-
-        return changed;
     }
 
     fn process_linear_mouse_movement(&mut self, delta_x: f64, delta_y: f64) {
