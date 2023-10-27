@@ -1,8 +1,9 @@
 //! A 'Game' in this context is a program that uses both wgpu and winit.
 pub(crate) mod input;
+mod surface;
 pub(crate) mod window;
 
-use std::sync::{atomic::AtomicBool, Arc, Mutex};
+use std::sync::{atomic::AtomicBool, Arc};
 
 use log::info;
 use thiserror::Error;
@@ -103,7 +104,6 @@ pub struct GameData {
     pub command_sender: flume::Sender<GameCommand>,
     pub surface_format: wgpu::TextureFormat,
     pub limits: wgpu::Limits,
-    pub config: wgpu::SurfaceConfiguration,
     pub size: winit::dpi::PhysicalSize<u32>,
     pub window: GameWindow,
     pub device: wgpu::Device,
@@ -183,7 +183,7 @@ pub(crate) struct GameState<T: Game> {
     input_map: input::InputMap<T::LinearInputType, T::VectorInputType>,
     command_receiver: flume::Receiver<GameCommand>,
 
-    surface: Mutex<wgpu::Surface>,
+    surface: surface::ResizableSurface,
 
     // While true, disallows cursor movement
     input_mode: InputMode,
@@ -311,20 +311,19 @@ impl<T: Game + 'static> GameState<T> {
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
         };
-        surface.configure(&device, &config);
+        let surface = surface::ResizableSurface::new(surface, &device, config);
 
         let (command_sender, command_receiver) = flume::unbounded();
 
         // Some state can be set by commands to ensure valid initial state.
         command_sender
             .try_send(GameCommand::SetInputMode(InputMode::Unified))
-            .expect("unbounded queue helf by this thread should send immediately");
+            .expect("unbounded queue held by this thread should send immediately");
 
         let data = GameData {
             command_sender,
             surface_format,
             limits,
-            config,
             size,
             window,
             device,
@@ -339,7 +338,7 @@ impl<T: Game + 'static> GameState<T> {
             data,
             current_modifiers: input::ModifiersState::default(),
             game,
-            surface: Mutex::new(surface),
+            surface,
             command_receiver,
             input_map,
             input_mode: InputMode::Unified,
@@ -548,17 +547,21 @@ impl<T: Game + 'static> GameState<T> {
                 }
                 _ => {}
             },
+            Event::DeviceEvent { device_id, event } => {
+                log::debug!("device event: {device_id:?}::{event:?}");
+            }
             Event::RedrawRequested(window_id) if window_id == self.window().id() => {
                 self.data.device.poll(wgpu::MaintainBase::Poll);
 
                 self.pre_frame_update();
 
-                // Check everything the game implementation can send 'upstream'
+                // Check everything the game implementation can send to us
                 if self.data.exit_flag.get() {
                     *control_flow = ControlFlow::Exit;
                 }
 
-                match self.render() {
+                let res = self.render();
+                match res {
                     Ok(_) => {}
                     Err(wgpu::SurfaceError::Lost) => self.resize(self.data.size),
                     Err(wgpu::SurfaceError::OutOfMemory) => *control_flow = ControlFlow::Exit,
@@ -580,20 +583,8 @@ impl<T: Game + 'static> GameState<T> {
     fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
         if new_size.width > 0 && new_size.height > 0 {
             self.data.size = new_size;
-            self.data.config.width = new_size.width;
-            self.data.config.height = new_size.height;
 
-            let lock = self.surface.lock().unwrap();
-
-            // Block until existing work is done.
-            let (s, r) = flume::bounded(1);
-            self.data
-                .queue
-                .on_submitted_work_done(move || s.send(()).unwrap());
-            self.data.device.poll(wgpu::Maintain::Wait);
-            let _ = r.recv().unwrap();
-
-            lock.configure(&self.data.device, &self.data.config);
+            self.surface.resize(new_size, &self.data.queue);
 
             self.game.window_resize(&self.data, new_size)
         }
@@ -728,26 +719,27 @@ impl<T: Game + 'static> GameState<T> {
     }
 
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
-        let lock = self.surface.lock().unwrap();
+        // If we are in the process of resizing, don't do anything
+        if let Some(surface) = self.surface.get(&self.data.device) {
+            let was_suboptimal = {
+                let output = surface.get_current_texture()?;
+                let view = output
+                    .texture
+                    .create_view(&wgpu::TextureViewDescriptor::default());
 
-        let was_suboptimal = {
-            let output = lock.get_current_texture()?;
-            let view = output
-                .texture
-                .create_view(&wgpu::TextureViewDescriptor::default());
+                self.game.render_to(&self.data, view);
 
-            self.game.render_to(&self.data, view);
+                let was_suboptimal = output.suboptimal;
 
-            let was_suboptimal = output.suboptimal;
+                output.present();
 
-            output.present();
+                was_suboptimal
+            };
 
-            was_suboptimal
-        };
-
-        if was_suboptimal {
-            // Force recreation
-            return Err(wgpu::SurfaceError::Lost);
+            if was_suboptimal {
+                // Force recreation
+                return Err(wgpu::SurfaceError::Lost);
+            }
         }
         Ok(())
     }
