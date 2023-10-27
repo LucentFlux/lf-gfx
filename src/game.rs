@@ -198,11 +198,16 @@ impl<T: Game + 'static> GameState<T> {
     async fn new(init: T::InitData, window: GameWindow) -> Self {
         let size = (&window).inner_size();
 
-        // The instance is a handle to our GPU
-        // Backends::all => Vulkan + Metal + DX12 + Browser WebGPU
+        #[cfg(debug_assertions)]
+        let flags = wgpu::InstanceFlags::DEBUG | wgpu::InstanceFlags::VALIDATION;
+        #[cfg(not(debug_assertions))]
+        let flags = wgpu::InstanceFlags::DISCARD_HAL_LABELS;
+
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::util::backend_bits_from_env().unwrap_or(wgpu::Backends::all()),
             dx12_shader_compiler: wgpu::util::dx12_shader_compiler_from_env().unwrap_or_default(),
+            flags,
+            gles_minor_version: wgpu::Gles3MinorVersion::Automatic,
         });
 
         let surface;
