@@ -141,7 +141,7 @@ pub trait Game: Sized {
     /// to allow for egui integration, among others.
     ///
     /// This method only receives input events if the cursor is not captured, to avoid UI glitches.
-    fn process_raw_event<'a, T>(&mut self, event: Event<T>) -> Option<Event<T>> {
+    fn process_raw_event<'a, T>(&mut self, _: &GameData, event: Event<T>) -> Option<Event<T>> {
         Some(event)
     }
 
@@ -439,7 +439,7 @@ impl<T: Game + 'static> GameState<T> {
         // But only send keyboard and mouse input events to UI if the mouse isn't captured.
         let should_send_input = self.input_mode.should_propogate_raw_input();
         if should_send_input || !Self::is_input_event(&event) {
-            event = match self.game.process_raw_event(event) {
+            event = match self.game.process_raw_event(&self.data, event) {
                 None => return,
                 Some(event) => event,
             };
