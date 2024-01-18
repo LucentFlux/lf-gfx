@@ -12,7 +12,7 @@ categories = ["game-development", "graphics"]
 include = ["/Cargo.toml", "/LICENSE", "/README.md", "/src/**"]
 
 [dependencies]
-wgpu = { version = "0.18" }
+wgpu = { version = "0.19" }
 winit = { version = "0.29", features = ["serde", "rwh_05"] }
 bytemuck = "1.12"
 bytemuck_derive = "1.3"
