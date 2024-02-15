@@ -6,7 +6,6 @@ pub(crate) mod window;
 use std::sync::{atomic::AtomicBool, Arc};
 
 use log::info;
-use thiserror::Error;
 use winit::{
     dpi::PhysicalPosition,
     event::{DeviceEvent, Event, WindowEvent},
@@ -20,14 +19,6 @@ use crate::{game::window::GameWindow, LfLimitsExt};
 use self::input::{InputMap, MouseInputType, VectorInputActivation, VectorInputType};
 
 const KEYBINDS_STORAGE_KEY: &'static str = "keybinds";
-
-#[derive(Debug, Error)]
-pub enum GameInitialisationFailure {
-    #[error("failed to find an adapter (GPU) that supports the render surface")]
-    AdapterError,
-    #[error("failed to request a device from the adapter chosen: {0}")]
-    DeviceError(wgpu::RequestDeviceError),
-}
 
 /// A cloneable and distributable flag that can be cheaply queried to see if the game has exited.
 ///
@@ -131,13 +122,7 @@ pub trait Game: Sized {
     }
     fn default_inputs(&self) -> InputMap<Self::LinearInputType, Self::VectorInputType>;
 
-    fn init(data: &GameData, init: Self::InitData) -> Self;
-
-    fn on_init_failure(error: GameInitialisationFailure) -> ! {
-        let error = format!("failed to initialise: {}", error);
-
-        panic!("{}", error);
-    }
+    fn init(data: &GameData, init: Self::InitData) -> anyhow::Result<Self>;
 
     /// Allows you to intercept and cancel events, before passing them off to the standard event handler,
     /// to allow for egui integration, among others.
@@ -197,7 +182,7 @@ pub(crate) struct GameState<T: Game> {
 
 impl<T: Game + 'static> GameState<T> {
     // Creating some of the wgpu types requires async code
-    async fn new(init: T::InitData, window: GameWindow) -> Self {
+    async fn new(init: T::InitData, window: GameWindow) -> anyhow::Result<Self> {
         let size = (&window).inner_size();
 
         #[cfg(debug_assertions)]
@@ -216,9 +201,7 @@ impl<T: Game + 'static> GameState<T> {
         // On wasm, we need to insert ourselves into the DOM
         #[cfg(target_arch = "wasm32")]
         {
-            surface = instance
-                .create_surface_from_canvas(window.canvas())
-                .unwrap();
+            surface = instance.create_surface_from_canvas(window.canvas())?;
         }
         // # Safety
         //
@@ -226,20 +209,17 @@ impl<T: Game + 'static> GameState<T> {
         // State owns the window so this should be safe.
         #[cfg(not(target_arch = "wasm32"))]
         {
-            surface = unsafe { instance.create_surface(&*window) }.unwrap();
+            surface = unsafe { instance.create_surface(&*window) }?;
         }
 
-        let adapter = match instance
+        let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 force_fallback_adapter: false,
                 compatible_surface: Some(&surface),
             })
             .await
-        {
-            Some(adapter) => adapter,
-            None => T::on_init_failure(GameInitialisationFailure::AdapterError),
-        };
+            .ok_or(anyhow::Error::msg("failed to request adapter"))?;
 
         let available_limits = if cfg!(target_arch = "wasm32") {
             wgpu::Limits::downlevel_webgl2_defaults()
@@ -272,7 +252,7 @@ impl<T: Game + 'static> GameState<T> {
         info!("info: {:#?}", adapter.get_info());
         info!("limits: {:#?}", adapter.limits());
 
-        let (device, queue) = match adapter
+        let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
                     features,
@@ -281,16 +261,12 @@ impl<T: Game + 'static> GameState<T> {
                 },
                 None,
             )
-            .await
-        {
-            Ok(vs) => vs,
-            Err(e) => T::on_init_failure(GameInitialisationFailure::DeviceError(e)),
-        };
+            .await?;
 
         // Configure surface
         let mut surface_config = surface
             .get_default_config(&adapter, size.width, size.height)
-            .expect("got an adapter based on the surface");
+            .ok_or(anyhow::Error::msg("failed to get surface configuration"))?;
         surface_config.present_mode = wgpu::PresentMode::AutoVsync;
         surface.configure(&device, &surface_config);
 
@@ -332,7 +308,7 @@ impl<T: Game + 'static> GameState<T> {
             queue,
             exit_flag: ExitFlag::new(),
         };
-        let game = T::init(&data, init);
+        let game = T::init(&data, init)?;
 
         // Gather inputs as a combination of registered user preferences and defaults.
         let mut input_map = game.default_inputs();
@@ -342,15 +318,12 @@ impl<T: Game + 'static> GameState<T> {
                 input_map.union(user_preferences);
             }
         }
-        if let Err(err) = crate::local_storage::store(
+        crate::local_storage::store(
             KEYBINDS_STORAGE_KEY,
             &serde_json::to_string_pretty(&input_map.serialize()).expect("keys serializable"),
-        ) {
-            crate::alert_dialogue(&format!("Failed to access storage:\n{err}"));
-            panic!("game requires storage access");
-        }
+        )?;
 
-        Self {
+        Ok(Self {
             data,
             game,
             surface,
@@ -359,7 +332,7 @@ impl<T: Game + 'static> GameState<T> {
             input_mode: InputMode::Unified,
             last_cursor_position: PhysicalPosition { x: 0.0, y: 0.0 },
             mouse_sensitivity: 0.01,
-        }
+        })
     }
 
     pub(crate) fn run(init: T::InitData) {
@@ -387,6 +360,15 @@ impl<T: Game + 'static> GameState<T> {
                             state_transmission: flume::Sender<GameState<T>>,
                         ) {
                             let state = GameState::<T>::new(init, window).await;
+                            let state = match state {
+                                Ok(state) => state,
+                                Err(err) => {
+                                    crate::alert_dialogue(&format!(
+                                        "Initialisation failure:\n{err}"
+                                    ));
+                                    panic!("{err}");
+                                }
+                            };
                             state_transmission.try_send(state).unwrap();
                         }
 
