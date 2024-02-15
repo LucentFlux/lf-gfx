@@ -19,6 +19,8 @@ use crate::{game::window::GameWindow, LfLimitsExt};
 
 use self::input::{InputMap, MouseInputType, VectorInputActivation, VectorInputType};
 
+const KEYBINDS_STORAGE_KEY: &'static str = "keybinds";
+
 #[derive(Debug, Error)]
 pub enum GameInitialisationFailure {
     #[error("failed to find an adapter (GPU) that supports the render surface")]
@@ -119,15 +121,15 @@ pub trait Game: Sized {
     /// Data processed before the window exists. This should be minimal and kept to `mpsc` message reception from initialiser threads.
     type InitData;
 
-    type LinearInputType;
-    type VectorInputType;
+    type LinearInputType: serde::Serialize + for<'a> serde::Deserialize<'a>;
+    type VectorInputType: serde::Serialize + for<'a> serde::Deserialize<'a>;
 
     fn title() -> String;
 
     fn target_limits() -> wgpu::Limits {
         wgpu::Limits::downlevel_webgl2_defaults()
     }
-    fn default_inputs() -> InputMap<Self::LinearInputType, Self::VectorInputType>;
+    fn default_inputs(&self) -> InputMap<Self::LinearInputType, Self::VectorInputType>;
 
     fn init(data: &GameData, init: Self::InitData) -> Self;
 
@@ -332,7 +334,18 @@ impl<T: Game + 'static> GameState<T> {
         };
         let game = T::init(&data, init);
 
-        let input_map = T::default_inputs();
+        // Gather inputs as a combination of registered user preferences and defaults.
+        let mut input_map = game.default_inputs();
+        let user_preferences = crate::local_storage::load(KEYBINDS_STORAGE_KEY);
+        if let Some(user_preferences) = user_preferences {
+            if let Ok(user_preferences) = InputMap::deserialize(&user_preferences) {
+                input_map.union(user_preferences);
+            }
+        }
+        crate::local_storage::store(
+            KEYBINDS_STORAGE_KEY,
+            &serde_json::to_string_pretty(&input_map.serialize()).expect("keys serializable"),
+        );
 
         Self {
             data,

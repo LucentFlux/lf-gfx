@@ -725,7 +725,7 @@ pub enum VectorInputType {
     MouseMove,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct InputMapInner<TLinear, TVector> {
     linear_map: HashMap<LinearInputType, TLinear>,
     vector_map: HashMap<VectorInputType, TVector>,
@@ -770,18 +770,27 @@ impl<TLinear, TVector> InputMap<TLinear, TVector> {
     pub fn get_vector(&self, input: &VectorInputType) -> Option<&TVector> {
         self.inner.vector_map.get(input)
     }
+
+    /// For each entry in `other`, replaces the entry in this, or adds a new entry.
+    pub fn union(&mut self, other: Self) {
+        for (input, value) in other.inner.linear_map {
+            self.assign_linear(input, value);
+        }
+        for (input, value) in other.inner.vector_map {
+            self.assign_vector(input, value);
+        }
+    }
 }
 
 impl<TLinear: Serialize, TVector: Serialize> InputMap<TLinear, TVector> {
-    pub fn to_str(&self) -> String {
-        serde_json::to_string(&self.inner).expect("input map serialization failed")
+    pub fn serialize(&self) -> String {
+        serde_json::to_string_pretty(&self.inner).expect("input map serialization failed")
     }
 }
 
 impl<'a, TLinear: Deserialize<'a>, TVector: Deserialize<'a>> InputMap<TLinear, TVector> {
-    pub fn from_str(s: &'a str) -> Result<Self, serde_json::Error> {
-        Ok(Self {
-            inner: serde_json::from_str(s)?,
-        })
+    pub fn deserialize(s: &'a str) -> Result<Self, serde_json::Error> {
+        let inner = serde_json::from_str::<InputMapInner<TLinear, TVector>>(&s)?;
+        Ok(Self { inner })
     }
 }

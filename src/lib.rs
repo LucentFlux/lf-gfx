@@ -22,6 +22,7 @@ pub use game::InputMode;
 pub mod input {
     pub use crate::game::input::*;
 }
+pub mod local_storage;
 
 use wgpu::util::DeviceExt;
 
