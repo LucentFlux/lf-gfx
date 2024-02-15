@@ -261,7 +261,8 @@ impl<T: Game + 'static> GameState<T> {
                 },
                 None,
             )
-            .await?;
+            .await
+            .map_err(|err| anyhow::Error::msg(format!("failed to get device: {err}")))?;
 
         // Configure surface
         let mut surface_config = surface

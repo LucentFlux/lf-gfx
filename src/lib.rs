@@ -7,7 +7,6 @@ mod limits;
 #[cfg(target_arch = "wasm32")]
 mod wasm;
 
-use dialog::DialogBox;
 pub use fragment_only::FragmentOnlyRenderBundleEncoder;
 pub use fragment_only::FragmentOnlyRenderBundleEncoderDescriptor;
 pub use fragment_only::FragmentOnlyRenderPass;
@@ -142,6 +141,7 @@ pub fn alert_dialogue(msg: &str) {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
+        use dialog::DialogBox;
         dialog::Message::new(msg)
             .title("Alert")
             .show()
