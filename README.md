@@ -58,7 +58,7 @@ rp.draw();
 ```rust 
 use lf_gfx::local_storage;
 
-local_storage::store("my_key", "a value");
+local_storage::store("my_key", "a value").unwrap();
 
 // Persists between runs
 let stored = local_storage::load("my_key");

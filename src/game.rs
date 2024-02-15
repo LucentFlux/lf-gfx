@@ -342,10 +342,13 @@ impl<T: Game + 'static> GameState<T> {
                 input_map.union(user_preferences);
             }
         }
-        crate::local_storage::store(
+        if let Err(err) = crate::local_storage::store(
             KEYBINDS_STORAGE_KEY,
             &serde_json::to_string_pretty(&input_map.serialize()).expect("keys serializable"),
-        );
+        ) {
+            crate::alert_dialogue(&format!("Failed to access storage:\n{err}"));
+            panic!("game requires storage access");
+        }
 
         Self {
             data,

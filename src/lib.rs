@@ -7,6 +7,7 @@ mod limits;
 #[cfg(target_arch = "wasm32")]
 mod wasm;
 
+use dialog::DialogBox;
 pub use fragment_only::FragmentOnlyRenderBundleEncoder;
 pub use fragment_only::FragmentOnlyRenderBundleEncoderDescriptor;
 pub use fragment_only::FragmentOnlyRenderPass;
@@ -45,6 +46,108 @@ pub fn block_on(future: impl std::future::Future<Output = ()> + 'static) {
 
     #[cfg(not(target_arch = "wasm32"))]
     pollster::block_on(future);
+}
+
+/// Gives whether the current execution environment (i.e. Browser) supports the provided HTML tag.
+/// Returns `true` on native.
+pub fn is_html_tag_supported(tag: &str) -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = tag;
+        return true;
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        let window = match web_sys::window() {
+            None => return false,
+            Some(window) => window,
+        };
+        let document = match window.document() {
+            None => return false,
+            Some(document) => document,
+        };
+        return document.create_element(tag).is_ok();
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+mod pretty_alert {
+    pub(super) struct PrettyAlertFailure;
+
+    impl From<wasm_bindgen::JsValue> for PrettyAlertFailure {
+        fn from(_: wasm_bindgen::JsValue) -> Self {
+            Self
+        }
+    }
+    impl From<()> for PrettyAlertFailure {
+        fn from(_: ()) -> Self {
+            Self
+        }
+    }
+
+    pub(super) fn try_pretty_alert(msg: &str) -> Result<(), PrettyAlertFailure> {
+        use wasm_bindgen::JsCast;
+
+        let document = web_sys::window()
+            .expect("app requires window")
+            .document()
+            .expect("app requires DOM");
+        let body = document.body().expect("DOM has body");
+
+        let dialog = document.create_element("dialog")?;
+        dialog.set_id("lf-alert");
+        dialog.set_attribute("style", r#"font-family: mono; max-width: 50%;"#)?;
+        {
+            let text_div = document.create_element("div")?;
+            text_div.set_text_content(Some(msg));
+            dialog.append_child(&text_div)?;
+
+            let button_div = document.create_element("div")?;
+            button_div.set_attribute("style", r#"display: grid; margin-top: 10px;"#)?;
+            {
+                let button = document.create_element("button")?;
+                button.set_attribute(
+                    "style",
+                    r#"border: 0px; font-family: sans; font-size: 20px; padding: 10px;"#,
+                )?;
+                button.set_attribute("autofocus", "true")?;
+                button.set_attribute("onclick", "document.getElementById('lf-alert').remove();")?;
+                button.set_text_content(Some("Okay"));
+                button_div.append_child(&button)?;
+            }
+            dialog.append_child(&button_div)?;
+        }
+        body.append_child(&dialog)?;
+
+        dialog
+            .dyn_ref::<web_sys::HtmlDialogElement>()
+            .ok_or(())?
+            .show_modal()?;
+
+        Ok(())
+    }
+}
+
+/// Produces a dialogue box with an `okay` response. Good for quick and dirty errors when something has gone very wrong.
+pub fn alert_dialogue(msg: &str) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let res = pretty_alert::try_pretty_alert(msg);
+        if res.is_err() {
+            web_sys::window()
+                .expect("app requires window")
+                .alert_with_message(msg)
+                .expect("all browsers should have alert");
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        dialog::Message::new(msg)
+            .title("Alert")
+            .show()
+            .expect("dialog box unavailable")
+    }
 }
 
 /// Some operations care about alignment in such a way that it is often easier to simply round all buffer sizes up to the nearest

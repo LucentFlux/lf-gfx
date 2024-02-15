@@ -1,18 +1,38 @@
 //! A key-value store implemented either via a file next to the executable, or
 //! local browser storage on Web.
 
-#[cfg(target_arch = "wasm32")]
-fn load_web(key: &str) -> Option<String> {
-    let storage = web_sys::window().ok()?.local_storage().ok()?.ok()?;
-
-    storage.get_item(key).ok()
+#[derive(Debug, thiserror::Error)]
+pub enum StoreError {
+    #[error("the file {} could not be written to: {}", .path.display(), .err)]
+    FileUnwriteable {
+        path: std::path::PathBuf,
+        err: std::io::Error,
+    },
+    #[error("local browser storage was not available - ensure cookies are permitted for this site to store your game data, and then refresh the page")]
+    LocalStorageUnavailable,
 }
 
 #[cfg(target_arch = "wasm32")]
-fn store_web(key: &str, value: &str) {
-    let storage = web_sys::window().ok()?.local_storage().ok()?.ok()?;
+fn load_web(key: &str) -> Option<String> {
+    let storage = web_sys::window()
+        .expect("app requires window")
+        .local_storage()
+        .ok()??;
 
-    storage.set_item(key, value)
+    storage.get_item(key).ok()?
+}
+
+#[cfg(target_arch = "wasm32")]
+fn store_web(key: &str, value: &str) -> Result<(), StoreError> {
+    let storage = web_sys::window()
+        .expect("app requires window")
+        .local_storage()
+        .map_err(|_| StoreError::LocalStorageUnavailable)?
+        .ok_or(StoreError::LocalStorageUnavailable)?;
+
+    storage
+        .set_item(key, value)
+        .map_err(|_| StoreError::LocalStorageUnavailable)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -66,11 +86,14 @@ fn load_native(key: &str) -> Option<String> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn store_native(key: &str, value: &str) {
-    let res = std::fs::write(native_path(key), value);
+fn store_native(key: &str, value: &str) -> Result<(), StoreError> {
+    let path = native_path(key);
+    let res = std::fs::write(&path, value);
     if let Err(err) = res {
-        log::error!("failed to record local value with key {key}: {err}")
+        log::error!("failed to record local value with key {key}: {err}");
+        return Err(StoreError::FileUnwriteable { path, err });
     }
+    return Ok(());
 }
 
 /// Loads the string associated with a key. These values persist through program
@@ -85,10 +108,10 @@ pub fn load(key: &str) -> Option<String> {
 
 /// Stores a string associated with a key. These values persist through program
 /// runs.
-pub fn store(key: &str, value: &str) {
+pub fn store(key: &str, value: &str) -> Result<(), StoreError> {
     #[cfg(target_arch = "wasm32")]
-    store_web(key, value);
+    return store_web(key, value);
 
     #[cfg(not(target_arch = "wasm32"))]
-    store_native(key, value);
+    return store_native(key, value);
 }
