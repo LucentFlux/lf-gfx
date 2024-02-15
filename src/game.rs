@@ -170,7 +170,7 @@ pub(crate) struct GameState<T: Game> {
     input_map: input::InputMap<T::LinearInputType, T::VectorInputType>,
     command_receiver: flume::Receiver<GameCommand>,
 
-    surface: surface::ResizableSurface,
+    surface: surface::ResizableSurface<'static>,
 
     // While true, disallows cursor movement
     input_mode: InputMode,
@@ -197,20 +197,7 @@ impl<T: Game + 'static> GameState<T> {
             gles_minor_version: wgpu::Gles3MinorVersion::Automatic,
         });
 
-        let surface;
-        // On wasm, we need to insert ourselves into the DOM
-        #[cfg(target_arch = "wasm32")]
-        {
-            surface = instance.create_surface_from_canvas(window.canvas())?;
-        }
-        // # Safety
-        //
-        // The surface needs to live as long as the window that created it.
-        // State owns the window so this should be safe.
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            surface = unsafe { instance.create_surface(&*window) }?;
-        }
+        let surface = window.create_surface(&instance)?;
 
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -228,9 +215,9 @@ impl<T: Game + 'static> GameState<T> {
         };
 
         let target_limits = T::target_limits();
-        let limits = available_limits.intersection(&target_limits);
+        let required_limits = available_limits.intersection(&target_limits);
 
-        let mut features = wgpu::Features::empty();
+        let mut required_features = wgpu::Features::empty();
         // Assume integrated and virtual GPUs, and CPUs, are UMA
         if adapter
             .features()
@@ -242,10 +229,10 @@ impl<T: Game + 'static> GameState<T> {
                     | wgpu::DeviceType::VirtualGpu
             )
         {
-            features |= wgpu::Features::MAPPABLE_PRIMARY_BUFFERS;
+            required_features |= wgpu::Features::MAPPABLE_PRIMARY_BUFFERS;
         }
         // Things that are always helpful
-        features |= adapter.features().intersection(
+        required_features |= adapter.features().intersection(
             wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES,
         );
 
@@ -255,8 +242,8 @@ impl<T: Game + 'static> GameState<T> {
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
-                    features,
-                    limits: limits.clone(),
+                    required_features,
+                    required_limits: required_limits.clone(),
                     label: None,
                 },
                 None,
@@ -289,6 +276,7 @@ impl<T: Game + 'static> GameState<T> {
             present_mode: surface_caps.present_modes[0],
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
+            desired_maximum_frame_latency: 2,
         };
         let surface = surface::ResizableSurface::new(surface, &device, config);
 
@@ -302,7 +290,7 @@ impl<T: Game + 'static> GameState<T> {
         let data = GameData {
             command_sender,
             surface_format,
-            limits,
+            limits: required_limits,
             size,
             window,
             device,

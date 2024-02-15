@@ -28,8 +28,8 @@ impl ResizableSurfaceState {
     }
 }
 
-pub(super) struct ResizableSurface {
-    surface: wgpu::Surface,
+pub(super) struct ResizableSurface<'window> {
+    surface: wgpu::Surface<'window>,
 
     config: wgpu::SurfaceConfiguration,
 
@@ -37,9 +37,9 @@ pub(super) struct ResizableSurface {
     new_size: winit::dpi::PhysicalSize<u32>,
 }
 
-impl ResizableSurface {
+impl<'window> ResizableSurface<'window> {
     pub(super) fn new(
-        surface: wgpu::Surface,
+        surface: wgpu::Surface<'window>,
         device: &wgpu::Device,
         config: wgpu::SurfaceConfiguration,
     ) -> Self {

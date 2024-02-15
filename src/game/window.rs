@@ -1,10 +1,10 @@
-use std::ops::Deref;
+use std::sync::Arc;
 
 use wgpu::Device;
 use winit::{event_loop::EventLoopWindowTarget, window::WindowBuilder};
 
 pub struct GameWindow {
-    window: winit::window::Window,
+    window: Arc<winit::window::Window>,
 
     #[cfg(target_arch = "wasm32")]
     canvas: web_sys::HtmlCanvasElement,
@@ -24,6 +24,7 @@ impl GameWindow {
                 .with_canvas(Some(canvas.clone()))
         };
         let window = builder.build(window_target).unwrap();
+        let window = Arc::new(window);
 
         Self {
             window,
@@ -36,9 +37,16 @@ impl GameWindow {
     pub fn canvas(&self) -> web_sys::HtmlCanvasElement {
         self.canvas.clone()
     }
+
+    pub(crate) fn create_surface(
+        &self,
+        instance: &wgpu::Instance,
+    ) -> Result<wgpu::Surface<'static>, wgpu::CreateSurfaceError> {
+        instance.create_surface(Arc::clone(&self.window))
+    }
 }
 
-impl Deref for GameWindow {
+impl std::ops::Deref for GameWindow {
     type Target = winit::window::Window;
 
     fn deref(&self) -> &Self::Target {
