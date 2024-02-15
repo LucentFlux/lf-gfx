@@ -124,7 +124,7 @@ pub trait Game: Sized {
     type LinearInputType: serde::Serialize + for<'a> serde::Deserialize<'a>;
     type VectorInputType: serde::Serialize + for<'a> serde::Deserialize<'a>;
 
-    fn title() -> String;
+    fn title() -> impl Into<String>;
 
     fn target_limits() -> wgpu::Limits {
         wgpu::Limits::downlevel_webgl2_defaults()
@@ -625,7 +625,7 @@ impl<T: Game + 'static> GameState<T> {
         if !self.input_mode.should_handle_input() {
             return;
         }
-        let input_value = self.input_map.get_linear(&inputted);
+        let input_value = self.input_map.get_linear(inputted);
         if let Some(input_value) = input_value {
             self.game
                 .handle_linear_input(&self.data, input_value, activation)
@@ -640,7 +640,7 @@ impl<T: Game + 'static> GameState<T> {
         if !self.input_mode.should_handle_input() {
             return;
         }
-        let input_value = self.input_map.get_vector(&inputted);
+        let input_value = self.input_map.get_vector(inputted);
         if let Some(input_value) = input_value {
             self.game
                 .handle_vector_input(&self.data, input_value, activation)

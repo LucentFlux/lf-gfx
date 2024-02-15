@@ -25,24 +25,39 @@ fn native_path(key: &str) -> std::path::PathBuf {
         "local storage keys must be alphanumeric/underscores only"
     );
 
-    let fallback = std::path::PathBuf::from_str("./data/").unwrap();
+    // Each directory to try, in order.
+    let dir_list = [
+        // Try next to the exe in a folder called `data`
+        std::env::current_exe().ok().map(|dir| dir.join("data")),
+        // Else try in the user's data dir in a folder named after the package
+        #[cfg(not(debug_assertions))]
+        dirs::data_dir().map(|dir| dir.join(env!("CARGO_PKG_NAME"))),
+        // Else try the active dir
+        std::env::current_dir().ok().map(|dir| dir.join("data")),
+        // Else whatever `./data/` resolves to
+        Some(std::path::PathBuf::from_str("./data/").expect("`./data/` is always valid dir")),
+    ];
 
-    // Test for fallback path in case global path doesn't exist. Also allows for overriding
-    if fallback.is_dir() {
-        return fallback.join(key).with_extension(EXTENSION);
-    }
+    for dir in dir_list {
+        let dir = match dir {
+            None => continue,
+            Some(dir) => dir,
+        };
 
-    let mut path = dirs::document_dir()
-        .map(|dir| dir.join("LucentFlux").join(env!("CARGO_PKG_NAME")))
-        .unwrap_or_else(|| fallback.clone());
-
-    if !path.is_dir() {
-        if let Err(_) = std::fs::create_dir(&path) {
-            path = fallback;
+        if !dir.is_dir() {
+            if let Err(err) = std::fs::create_dir_all(&dir) {
+                log::error!(
+                    "failed to create data dir {}: {err}",
+                    dir.canonicalize().unwrap_or_else(|_| dir.clone()).display()
+                );
+                continue;
+            }
         }
+
+        return dir.join(key).with_extension(EXTENSION);
     }
 
-    return path.join(key).with_extension(EXTENSION);
+    panic!("no fallback directory was writeable");
 }
 
 #[cfg(not(target_arch = "wasm32"))]

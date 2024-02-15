@@ -720,6 +720,18 @@ pub enum LinearInputType {
     Mouse(MouseInputType),
 }
 
+impl From<KeyCode> for LinearInputType {
+    fn from(value: KeyCode) -> Self {
+        Self::KnownKeyboard(value)
+    }
+}
+
+impl From<MouseInputType> for LinearInputType {
+    fn from(value: MouseInputType) -> Self {
+        Self::Mouse(value)
+    }
+}
+
 #[derive(Debug, Hash, PartialEq, Eq, Serialize, Deserialize, Clone, Copy)]
 pub enum VectorInputType {
     MouseMove,
@@ -747,28 +759,34 @@ impl<TLinear, TVector> InputMap<TLinear, TVector> {
         }
     }
 
-    pub fn assign_linear(&mut self, input: LinearInputType, value: TLinear) {
-        self.inner.linear_map.insert(input, value);
+    #[inline]
+    pub fn assign_linear(&mut self, input: impl Into<LinearInputType>, value: TLinear) {
+        self.inner.linear_map.insert(input.into(), value);
     }
 
-    pub fn unassign_linear(&mut self, input: &LinearInputType) {
-        self.inner.linear_map.remove(input);
+    #[inline]
+    pub fn unassign_linear(&mut self, input: impl Into<LinearInputType>) {
+        self.inner.linear_map.remove(&input.into());
     }
 
-    pub fn get_linear(&self, input: &LinearInputType) -> Option<&TLinear> {
-        self.inner.linear_map.get(input)
+    #[inline]
+    pub fn get_linear(&self, input: impl Into<LinearInputType>) -> Option<&TLinear> {
+        self.inner.linear_map.get(&input.into())
     }
 
-    pub fn assign_vector(&mut self, input: VectorInputType, value: TVector) {
-        self.inner.vector_map.insert(input, value);
+    #[inline]
+    pub fn assign_vector(&mut self, input: impl Into<VectorInputType>, value: TVector) {
+        self.inner.vector_map.insert(input.into(), value);
     }
 
-    pub fn unassign_vector(&mut self, input: &VectorInputType) {
-        self.inner.vector_map.remove(input);
+    #[inline]
+    pub fn unassign_vector(&mut self, input: impl Into<VectorInputType>) {
+        self.inner.vector_map.remove(&input.into());
     }
 
-    pub fn get_vector(&self, input: &VectorInputType) -> Option<&TVector> {
-        self.inner.vector_map.get(input)
+    #[inline]
+    pub fn get_vector(&self, input: impl Into<VectorInputType>) -> Option<&TVector> {
+        self.inner.vector_map.get(&input.into())
     }
 
     /// For each entry in `other`, replaces the entry in this, or adds a new entry.
