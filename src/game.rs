@@ -18,8 +18,6 @@ use crate::{game::window::GameWindow, LfLimitsExt};
 
 use self::input::{InputMap, MouseInputType, VectorInputActivation, VectorInputType};
 
-const KEYBINDS_STORAGE_KEY: &'static str = "keybinds";
-
 /// A cloneable and distributable flag that can be cheaply queried to see if the game has exited.
 ///
 /// The idea is to clone this into in every thread you spawn so that they can gracefully exit when the game does.
@@ -112,8 +110,8 @@ pub trait Game: Sized {
     /// Data processed before the window exists. This should be minimal and kept to `mpsc` message reception from initialiser threads.
     type InitData;
 
-    type LinearInputType: serde::Serialize + for<'a> serde::Deserialize<'a>;
-    type VectorInputType: serde::Serialize + for<'a> serde::Deserialize<'a>;
+    type LinearInputType;
+    type VectorInputType;
 
     fn title() -> impl Into<String>;
 
@@ -300,17 +298,7 @@ impl<T: Game + 'static> GameState<T> {
         let game = T::init(&data, init)?;
 
         // Gather inputs as a combination of registered user preferences and defaults.
-        let mut input_map = game.default_inputs();
-        let user_preferences = crate::local_storage::load(KEYBINDS_STORAGE_KEY);
-        if let Some(user_preferences) = user_preferences {
-            if let Ok(user_preferences) = InputMap::deserialize(&user_preferences) {
-                input_map.union(user_preferences);
-            }
-        }
-        crate::local_storage::store(
-            KEYBINDS_STORAGE_KEY,
-            &serde_json::to_string_pretty(&input_map.serialize()).expect("keys serializable"),
-        )?;
+        let input_map = game.default_inputs();
 
         Ok(Self {
             data,
