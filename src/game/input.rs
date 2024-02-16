@@ -2,18 +2,6 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-/// Represents the current state of the keyboard modifiers
-///
-/// Each flag represents a modifier and is set if this modifier is active.
-#[derive(Debug, Default)]
-pub struct ModifiersState {
-    pub shift: bool,
-    pub ctrl: bool,
-    pub alt: bool,
-    /// This is the "windows" key on PC and "command" key on Mac.
-    pub logo: bool,
-}
-
 /// A value between 0 and 1 that some input has been activated
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub struct LinearInputActivation(f32);
