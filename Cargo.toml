@@ -27,7 +27,7 @@ ouroboros = "0.18"
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
-web-sys = { version = "=0.3.67", features = ["Window", "Storage", "Element", "Node", "HtmlDialogElement"] }
+web-sys = { version = "=0.3.68", features = ["Window", "Storage", "Element", "Node", "HtmlDialogElement"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 pollster = "0.3"
