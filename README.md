@@ -103,8 +103,8 @@ impl lf_gfx::Game for MyGame {
         return inputs;
     }
 
-    fn init(data: &lf_gfx::GameData, init: Self::InitData) -> Self {
-        Self { /* .. */ }
+    fn init(data: &lf_gfx::GameData, init: Self::InitData) -> anyhow::Result<Self> {
+        Ok(Self { /* .. */ })
     }
 
     fn window_resize(&mut self, data: &lf_gfx::GameData, new_size: winit::dpi::PhysicalSize<u32>) {
@@ -138,4 +138,14 @@ fn main() {
     use lf_gfx::LfGameExt;
     MyGame::run(MyGameCfg { /* .. */ });
 }
+```
+
+## Faster Non-cryptographic Hashing
+
+```rust
+let mut hs = lf_gfx::FastHashSet::default();
+let mut hm = lf_gfx::FastHashMap::default();
+
+hs.insert(10);
+hm.insert(20, 30);
 ```
