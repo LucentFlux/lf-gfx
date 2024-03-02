@@ -27,22 +27,26 @@ pub mod input {
 pub mod local_storage;
 
 // Resolve https://github.com/rust-lang/rustc-hash/issues/14 by wrapping `rustc_hash::FxHasher`.
-pub struct FastHashState;
+pub struct FastHashState {
+    seed: u32,
+}
 impl std::hash::BuildHasher for FastHashState {
     type Hasher = rustc_hash::FxHasher;
 
     fn build_hasher(&self) -> Self::Hasher {
-        use rand::Rng;
         use std::hash::Hasher;
 
         let mut hasher = rustc_hash::FxHasher::default();
-        hasher.write_u32(rand::thread_rng().gen());
+        hasher.write_u32(self.seed);
         return hasher;
     }
 }
 impl Default for FastHashState {
     fn default() -> Self {
-        Self
+        use rand::Rng;
+        Self {
+            seed: rand::thread_rng().gen(),
+        }
     }
 }
 
