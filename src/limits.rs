@@ -47,10 +47,14 @@ macro_rules! binop_limits {
                 max_compute_workgroups_per_dimension,
                 max_push_constant_size,
                 max_non_sampler_bindings,
+                max_color_attachment_bytes_per_sample,
+                max_color_attachments,
+                max_subgroup_size,
             }
             min {
                 min_uniform_buffer_offset_alignment,
                 min_storage_buffer_offset_alignment,
+                min_subgroup_size,
             }
         )
     };

@@ -45,7 +45,7 @@ impl Default for FastHashState {
     fn default() -> Self {
         use rand::Rng;
         Self {
-            seed: rand::thread_rng().gen(),
+            seed: rand::rng().random(),
         }
     }
 }
@@ -287,11 +287,11 @@ impl LfDeviceExt for wgpu::Device {
         &self,
         desc: wgpu::ShaderModuleDescriptor,
     ) -> wgpu::ShaderModule {
-        #[cfg(any(target_arch = "wasm", debug_assertions))]
+        #[cfg(any(target_arch = "wasm32", debug_assertions))]
         {
             self.create_shader_module(desc)
         }
-        #[cfg(not(any(target_arch = "wasm", debug_assertions)))]
+        #[cfg(not(any(target_arch = "wasm32", debug_assertions)))]
         {
             self.create_shader_module_unchecked(desc)
         }

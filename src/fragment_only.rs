@@ -1,10 +1,13 @@
 use core::num::NonZeroU32;
-use std::borrow::Cow;
+use std::{borrow::Cow, collections::HashMap};
 
-use wgpu::util::{DeviceExt, RenderEncoder};
+use wgpu::{
+    util::{DeviceExt, RenderEncoder},
+    PipelineCompilationOptions,
+};
 
 #[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck_derive::Pod, bytemuck_derive::Zeroable)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct FullscreenVertex {
     pub position: [f32; 4],
     pub uv: [f32; 2],
@@ -16,6 +19,7 @@ pub struct FragmentOnlyRenderPipelineDescriptor<'a> {
     pub multisample: wgpu::MultisampleState,
     pub fragment: wgpu::FragmentState<'a>,
     pub multiview: Option<NonZeroU32>,
+    pub cache: Option<&'a wgpu::PipelineCache>,
 }
 
 pub struct FragmentOnlyRenderPipeline {
@@ -41,7 +45,7 @@ impl FragmentOnlyRenderPipeline {
             layout: desc.layout.clone(),
             vertex: wgpu::VertexState {
                 module: &fullscreen_vertex_shader,
-                entry_point: "main",
+                entry_point: Some("main"),
                 buffers: &[wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<FullscreenVertex>() as wgpu::BufferAddress,
                     step_mode: wgpu::VertexStepMode::Vertex,
@@ -58,12 +62,17 @@ impl FragmentOnlyRenderPipeline {
                         },
                     ],
                 }],
+                compilation_options: PipelineCompilationOptions {
+                    constants: &HashMap::new(),
+                    zero_initialize_workgroup_memory: false,
+                },
             },
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
             multisample: desc.multisample.clone(),
             fragment: Some(desc.fragment.clone()),
             multiview: desc.multiview.clone(),
+            cache: desc.cache.clone(),
         });
 
         let fullscreen_vertices = [

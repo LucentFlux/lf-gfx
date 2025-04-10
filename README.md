@@ -10,7 +10,7 @@ Reduced boilerplate for fragment shaders run on fullscreen quads:
 
 ```rust no_run
 use lf_gfx::{LfDeviceExt, LfCommandEncoderExt};
-# let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
+# let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
 # let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).unwrap();
 # let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default(), None)).unwrap();
 
@@ -33,10 +33,12 @@ let pipeline = device.create_fragment_only_render_pipeline(&lf_gfx::FragmentOnly
     multisample: wgpu::MultisampleState::default(),
     fragment: wgpu::FragmentState { 
         module: &module, 
-        entry_point: "main", 
-        targets: &[/* .. */] 
+        entry_point: Some("main"), 
+        targets: &[/* .. */] ,
+        compilation_options: wgpu::PipelineCompilationOptions::default(),
     },
     multiview: None,
+    cache: None,
 });
 
 let mut cmd = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {

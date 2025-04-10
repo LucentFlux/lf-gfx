@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use wgpu::Device;
-use winit::{event_loop::EventLoopWindowTarget, window::WindowBuilder};
+use winit::{event_loop::ActiveEventLoop, window::WindowAttributes};
 
 pub struct GameWindow {
     window: Arc<winit::window::Window>,
@@ -11,19 +11,21 @@ pub struct GameWindow {
 }
 
 impl GameWindow {
-    pub(super) fn new<T: super::Game>(window_target: &EventLoopWindowTarget<()>) -> Self {
-        let builder = WindowBuilder::new().with_title(T::title());
+    pub(super) fn new<T: super::Game>(window_target: &ActiveEventLoop) -> Self {
+        let mut attributes = WindowAttributes::default();
+        attributes.title = T::title().into();
+
         #[cfg(target_arch = "wasm32")]
-        let canvas = crate::wasm::get_canvas();
-        #[cfg(target_arch = "wasm32")]
-        let builder = {
-            use winit::platform::web::WindowBuilderExtWebSys;
-            builder
-                .with_prevent_default(true)
-                .with_focusable(true)
-                .with_canvas(Some(canvas.clone()))
+        let canvas = {
+            use winit::platform::web::WindowAttributesExtWebSys;
+            let canvas = crate::wasm::get_canvas();
+            attributes.with_canvas(Some(canvas.clone()));
+            canvas
         };
-        let window = builder.build(window_target).unwrap();
+
+        let window = window_target
+            .create_window(attributes)
+            .expect("Failed to create window");
         let window = Arc::new(window);
 
         Self {

@@ -9,7 +9,7 @@ use log::info;
 use winit::{
     dpi::PhysicalPosition,
     event::{DeviceEvent, Event, WindowEvent},
-    event_loop::{EventLoop, EventLoopWindowTarget},
+    event_loop::{ActiveEventLoop, EventLoop},
     keyboard::PhysicalKey,
     window::Window,
 };
@@ -188,11 +188,15 @@ impl<T: Game + 'static> GameState<T> {
         #[cfg(not(debug_assertions))]
         let flags = wgpu::InstanceFlags::DISCARD_HAL_LABELS;
 
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::util::backend_bits_from_env().unwrap_or(wgpu::Backends::all()),
-            dx12_shader_compiler: wgpu::util::dx12_shader_compiler_from_env().unwrap_or_default(),
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::from_env().unwrap_or_default(),
             flags,
-            gles_minor_version: wgpu::Gles3MinorVersion::Automatic,
+            backend_options: wgpu::BackendOptions {
+                gl: wgpu::GlBackendOptions {
+                    gles_minor_version: wgpu::Gles3MinorVersion::Automatic,
+                },
+                dx12: wgpu::Dx12BackendOptions::from_env_or_default(),
+            },
         });
 
         let surface = window.create_surface(&instance)?;
@@ -243,6 +247,7 @@ impl<T: Game + 'static> GameState<T> {
                     required_features,
                     required_limits: required_limits.clone(),
                     label: None,
+                    memory_hints: wgpu::MemoryHints::Performance,
                 },
                 None,
             )
@@ -380,15 +385,12 @@ impl<T: Game + 'static> GameState<T> {
                 | WindowEvent::CursorLeft { .. }
                 | WindowEvent::MouseWheel { .. }
                 | WindowEvent::MouseInput { .. }
-                | WindowEvent::TouchpadRotate { .. }
                 | WindowEvent::TouchpadPressure { .. }
                 | WindowEvent::AxisMotion { .. }
                 | WindowEvent::Touch(_)
                 | WindowEvent::KeyboardInput { .. }
                 | WindowEvent::ModifiersChanged(_)
-                | WindowEvent::Ime(_)
-                | WindowEvent::TouchpadMagnify { .. }
-                | WindowEvent::SmartMagnify { .. } => true,
+                | WindowEvent::Ime(_) => true,
                 _ => false,
             },
             winit::event::Event::DeviceEvent { event, .. } => match event {
@@ -403,7 +405,7 @@ impl<T: Game + 'static> GameState<T> {
         }
     }
 
-    fn receive_event(&mut self, mut event: Event<()>, window_target: &EventLoopWindowTarget<()>) {
+    fn receive_event(&mut self, mut event: Event<()>, window_target: &ActiveEventLoop) {
         // Discard events that aren't for us
         event = match event {
             Event::WindowEvent { window_id, .. } if window_id != self.window().id() => return,
@@ -423,7 +425,7 @@ impl<T: Game + 'static> GameState<T> {
         self.process_event(event, window_target)
     }
 
-    fn process_event(&mut self, event: Event<()>, window_target: &EventLoopWindowTarget<()>) {
+    fn process_event(&mut self, event: Event<()>, window_target: &ActiveEventLoop) {
         match event {
             Event::WindowEvent { event, window_id } if window_id == self.window().id() => {
                 match event {
