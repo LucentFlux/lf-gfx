@@ -19,7 +19,7 @@ impl GameWindow {
         let canvas = {
             use winit::platform::web::WindowAttributesExtWebSys;
             let canvas = crate::wasm::get_canvas();
-            attributes.with_canvas(Some(canvas.clone()));
+            attributes = attributes.with_canvas(Some(canvas.clone()));
             canvas
         };
 

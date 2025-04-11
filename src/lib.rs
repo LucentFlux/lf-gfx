@@ -8,6 +8,9 @@ mod limits;
 #[cfg(target_arch = "wasm32")]
 mod wasm;
 
+use std::sync::atomic::AtomicU32;
+use std::sync::atomic::Ordering;
+
 pub use fragment_only::FragmentOnlyRenderBundleEncoder;
 pub use fragment_only::FragmentOnlyRenderBundleEncoderDescriptor;
 pub use fragment_only::FragmentOnlyRenderPass;
@@ -27,6 +30,7 @@ pub mod input {
 pub mod local_storage;
 
 // Resolve https://github.com/rust-lang/rustc-hash/issues/14 by wrapping `rustc_hash::FxHasher`.
+static FAST_HASH_SEED: AtomicU32 = AtomicU32::new(0);
 pub struct FastHashState {
     seed: u32,
 }
@@ -43,9 +47,8 @@ impl std::hash::BuildHasher for FastHashState {
 }
 impl Default for FastHashState {
     fn default() -> Self {
-        use rand::Rng;
         Self {
-            seed: rand::rng().random(),
+            seed: FAST_HASH_SEED.fetch_add(1, Ordering::SeqCst),
         }
     }
 }
