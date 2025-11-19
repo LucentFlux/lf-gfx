@@ -70,7 +70,10 @@ impl<'window> ResizableSurface<'window> {
         })
     }
 
-    pub(super) fn get(&mut self, device: &wgpu::Device) -> Option<&wgpu::Surface> {
+    pub(super) fn get<'a>(
+        &'a mut self,
+        device: &wgpu::Device,
+    ) -> Option<&'a wgpu::Surface<'window>> {
         let state = self.state.load(std::sync::atomic::Ordering::SeqCst);
         let state = ResizableSurfaceState::decode(state);
 

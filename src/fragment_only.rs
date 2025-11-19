@@ -1,5 +1,5 @@
 use core::num::NonZeroU32;
-use std::{borrow::Cow, collections::HashMap};
+use std::borrow::Cow;
 
 use wgpu::{
     util::{DeviceExt, RenderEncoder},
@@ -63,7 +63,7 @@ impl FragmentOnlyRenderPipeline {
                     ],
                 }],
                 compilation_options: PipelineCompilationOptions {
-                    constants: &HashMap::new(),
+                    constants: &[],
                     zero_initialize_workgroup_memory: false,
                 },
             },

@@ -50,6 +50,16 @@ macro_rules! binop_limits {
                 max_color_attachment_bytes_per_sample,
                 max_color_attachments,
                 max_subgroup_size,
+                max_acceleration_structures_per_shader_stage,
+                max_binding_array_elements_per_shader_stage,
+                max_binding_array_sampler_elements_per_shader_stage,
+                max_blas_geometry_count,
+                max_blas_primitive_count,
+                max_mesh_multiview_count,
+                max_mesh_output_layers,
+                max_task_workgroup_total_count,
+                max_task_workgroups_per_dimension,
+                max_tlas_instance_count,
             }
             min {
                 min_uniform_buffer_offset_alignment,

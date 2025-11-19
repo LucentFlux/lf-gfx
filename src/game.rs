@@ -194,8 +194,14 @@ impl<T: Game + 'static> GameState<T> {
             backend_options: wgpu::BackendOptions {
                 gl: wgpu::GlBackendOptions {
                     gles_minor_version: wgpu::Gles3MinorVersion::Automatic,
+                    fence_behavior: wgpu::GlFenceBehavior::Normal,
                 },
                 dx12: wgpu::Dx12BackendOptions::from_env_or_default(),
+                noop: wgpu::NoopBackendOptions { enable: true },
+            },
+            memory_budget_thresholds: wgpu::MemoryBudgetThresholds {
+                for_resource_creation: None,
+                for_device_loss: None,
             },
         });
 
@@ -207,8 +213,7 @@ impl<T: Game + 'static> GameState<T> {
                 force_fallback_adapter: false,
                 compatible_surface: Some(&surface),
             })
-            .await
-            .ok_or(anyhow::Error::msg("failed to request adapter"))?;
+            .await?;
 
         let available_limits = if cfg!(target_arch = "wasm32") {
             wgpu::Limits::downlevel_webgl2_defaults()
@@ -242,17 +247,15 @@ impl<T: Game + 'static> GameState<T> {
         info!("limits: {:#?}", adapter.limits());
 
         let (device, queue) = adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    required_features,
-                    required_limits: required_limits.clone(),
-                    label: None,
-                    memory_hints: wgpu::MemoryHints::Performance,
-                },
-                None,
-            )
-            .await
-            .map_err(|err| anyhow::Error::msg(format!("failed to get device: {err}")))?;
+            .request_device(&wgpu::DeviceDescriptor {
+                required_features,
+                required_limits: required_limits.clone(),
+                label: None,
+                memory_hints: wgpu::MemoryHints::Performance,
+                experimental_features: wgpu::ExperimentalFeatures::disabled(),
+                trace: wgpu::Trace::Off,
+            })
+            .await?;
 
         // Configure surface
         let mut surface_config = surface
@@ -506,7 +509,7 @@ impl<T: Game + 'static> GameState<T> {
                         }
                     }
                     WindowEvent::RedrawRequested => {
-                        self.data.device.poll(wgpu::MaintainBase::Poll);
+                        let _ = self.data.device.poll(wgpu::PollType::Poll);
 
                         self.pre_frame_update();
 

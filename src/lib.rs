@@ -194,9 +194,6 @@ mod sealed {
     pub trait SealedDevice {}
     impl SealedDevice for wgpu::Device {}
 
-    pub trait SealedInstance {}
-    impl SealedInstance for wgpu::Instance {}
-
     pub trait SealedCommandEncoder {}
     impl SealedCommandEncoder for wgpu::CommandEncoder {}
 
@@ -232,10 +229,10 @@ pub trait LfDeviceExt: sealed::SealedDevice {
     fn create_buffer_padded(&self, desc: wgpu::BufferDescriptor) -> wgpu::Buffer;
     fn create_buffer_init_padded(&self, desc: PaddedBufferInitDescriptor) -> wgpu::Buffer;
 
-    fn create_fragment_only_render_bundle_encoder(
-        &self,
+    fn create_fragment_only_render_bundle_encoder<'a>(
+        &'a self,
         desc: &FragmentOnlyRenderBundleEncoderDescriptor,
-    ) -> FragmentOnlyRenderBundleEncoder;
+    ) -> FragmentOnlyRenderBundleEncoder<'a>;
 
     fn create_fragment_only_render_pipeline(
         &self,
@@ -272,10 +269,10 @@ impl LfDeviceExt for wgpu::Device {
         })
     }
 
-    fn create_fragment_only_render_bundle_encoder(
-        &self,
+    fn create_fragment_only_render_bundle_encoder<'a>(
+        &'a self,
         desc: &FragmentOnlyRenderBundleEncoderDescriptor,
-    ) -> FragmentOnlyRenderBundleEncoder {
+    ) -> FragmentOnlyRenderBundleEncoder<'a> {
         FragmentOnlyRenderBundleEncoder::new(self, desc)
     }
 
@@ -418,7 +415,10 @@ impl LfBufferExt for wgpu::Buffer {
             sender.send(e).expect("failed to send result of map");
         });
 
-        device.poll(wgpu::Maintain::Wait);
+        let _ = device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
 
         receiver
             .recv()
